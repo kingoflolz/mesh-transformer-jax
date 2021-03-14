@@ -14,6 +14,7 @@ setUpModule()
 import jax
 import numpy as np
 import optax
+import haiku as hk
 
 from transformer_shard import CausalTransformer
 
@@ -30,10 +31,14 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
         optax.scale(-1e-4),
     )
 
-    c = CausalTransformer(128, 8, 4, 256, opt)
+    c = CausalTransformer(dim=128, heads=8, layer_count=6, vocab=256, optimizer=opt)
 
-    while True:
+    print(f"Total parameters: {hk.data_structures.tree_size(c.state)}")
+
+    for i in range(10):
         sample = loader.get_samples()
         loss = c.train(sample)
 
         print(loss.mean())
+
+    jax.profiler.save_device_memory_profile("memory.pprof")

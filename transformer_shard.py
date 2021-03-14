@@ -211,6 +211,7 @@ class CausalTransformer:
                                                               ["batch", ...],
                                                               ["batch", ...]),
                                                      out_axes=(["batch", ...], ["shard", ...]),
+                                                     donate_argnums=(0,),
                                                      axis_resources={'shard': 'mp', 'batch': 'dp'})
 
         key = hk.PRNGSequence(42)
