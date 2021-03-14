@@ -16,9 +16,7 @@ class EmbeddingShard(hk.Module):
         self.dim_per_shard = in_dim // shards
         self.shards = shards
 
-        self.ln = hk.LayerNorm(-1, True, True)
-
-        self.proj = hk.Linear(self.out_dim)
+        self.proj = hk.Linear(self.out_dim, w_init=hk.initializers.TruncatedNormal(stddev=1/np.sqrt(in_dim)))
 
     def __call__(self, x):
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
@@ -31,7 +29,7 @@ class EmbeddingShard(hk.Module):
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
 class TransformerLayerShard(hk.Module):
-    def __init__(self, dim, heads, shards, name=None):
+    def __init__(self, dim, heads, shards, init_scale=1., name=None):
         super().__init__(name=name)
         assert dim % heads == 0
         assert heads % shards == 0
@@ -43,14 +41,14 @@ class TransformerLayerShard(hk.Module):
 
         self.ln = hk.LayerNorm(-1, True, True)
 
-        self.q = hk.Linear(self.dim_per_shard)
-        self.v = hk.Linear(self.dim_per_shard)
-        self.k = hk.Linear(self.dim_per_shard)
+        self.q = hk.Linear(self.dim_per_shard, with_bias=False)
+        self.v = hk.Linear(self.dim_per_shard, with_bias=False)
+        self.k = hk.Linear(self.dim_per_shard, with_bias=False)
 
-        self.o = hk.Linear(self.dim)
+        self.o = hk.Linear(self.dim, with_bias=False, w_init=hk.initializers.TruncatedNormal(stddev=init_scale/np.sqrt(self.dim)))
 
-        self.dense_proj = hk.Linear(self.dim_per_head * 4)
-        self.dense_proj_o = hk.Linear(self.dim)
+        self.dense_proj = hk.Linear(self.dim_per_shard * 4)
+        self.dense_proj_o = hk.Linear(self.dim, w_init=hk.initializers.TruncatedNormal(stddev=init_scale/np.sqrt(self.dim)))
 
     def __call__(self, x, mask=None):
         x = self.ln(x)
@@ -126,22 +124,24 @@ class CausalTransformerShard(hk.Module):
 
         self.embed = EmbeddingShard(vocab, dim, shards)
 
+        init_scale = 2. / layer_count
+
         for i in range(layer_count):
-            self.transformer_layers.append(TransformerLayerShard(dim, heads, shards))
+            self.transformer_layers.append(TransformerLayerShard(dim, heads, shards, init_scale=init_scale, name=f"layer_{i}"))
 
         self.proj = ProjectionShard(vocab, shards)
 
     def eval(self, context, target):
-        x = self.embed(context)
+        x = hk.remat(self.embed)(context)
 
         mask = jnp.zeros((x.shape[0], x.shape[0]))
         mask -= 10e10
         mask = jnp.triu(mask, 1)  # zero out the lower diagonal
 
         for l in self.transformer_layers:
-            x = x + l(x, mask)
+            x = x + hk.remat(l)(x, mask)
 
-        return self.proj.loss(x, target)
+        return hk.remat(self.proj.loss)(x, target)
 
     def train_loss(self, ctx, tgt):
         return self.eval(ctx, tgt).mean()

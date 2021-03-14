@@ -11,7 +11,7 @@ from loader import TextLoader
 
 bs = 16
 seq = 1024
-it = 100
+it = 50
 
 loader = TextLoader("data/enwik8", bs, seq)
 
@@ -25,7 +25,13 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     )
 
     start = time.time()
-    c = CausalTransformer(dim=3072, heads=8, layer_count=24, vocab=256, optimizer=opt)
+    
+    # 2.7B
+    # c = CausalTransformer(dim=3072, heads=8, layer_count=24, vocab=256, optimizer=opt)
+    
+    # 4.8B
+    c = CausalTransformer(dim=4096, heads=32, layer_count=24, vocab=256, optimizer=opt)
+    
     param_count = hk.data_structures.tree_size(c.state['params'])
 
     print(f"Initialized in {time.time() - start:.06}s")
