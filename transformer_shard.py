@@ -6,6 +6,13 @@ import optax
 from jax.experimental.maps import thread_resources
 
 
+def to_f32(t):
+    return jax.tree_map(lambda x: x.astype(jnp.float32) if x.dtype == jnp.bfloat16 else x, t)
+
+def to_bf16(t):
+    return jax.tree_map(lambda x: x.astype(jnp.bfloat16) if x.dtype == jnp.float32 else x, t)
+
+
 class EmbeddingShard(hk.Module):
     def __init__(self, in_dim, out_dim, shards, name=None):
         super().__init__(name=name)
@@ -18,11 +25,11 @@ class EmbeddingShard(hk.Module):
 
         self.proj = hk.Linear(self.out_dim, w_init=hk.initializers.TruncatedNormal(stddev=1/np.sqrt(in_dim)))
 
-    def __call__(self, x):
+    def __call__(self, x, dtype=jnp.bfloat16):
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
         shard_index = jnp.arange(0, self.dim_per_shard) + shard_start_index
 
-        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(jnp.float32))
+        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(dtype))
 
         return jax.lax.pmean(proj_out, "shard")
 
@@ -98,13 +105,13 @@ class ProjectionShard(hk.Module):
 
         return hk.Flatten()(jnp.transpose(all_proj, (1, 0, 2)))
 
-    def loss(self, x, targets):
+    def loss(self, x, targets, dtype=jnp.bfloat16):
         shard_logits = self.proj(x)
 
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
         shard_index = jnp.arange(0, self.dim_per_shard) + shard_start_index
 
-        gt_onehot = (shard_index.reshape(1, -1) == targets.reshape(-1, 1)).astype(jnp.float32)
+        gt_onehot = (shard_index.reshape(1, -1) == targets.reshape(-1, 1)).astype(dtype)
 
         shifted = shard_logits - jax.lax.stop_gradient(jax.lax.pmax(jax.lax.stop_gradient(shard_logits.max(-1, keepdims=True)), "shard"))
         logsoftmax = shifted - jnp.log(jax.lax.psum(jnp.sum(jnp.exp(shifted), -1, keepdims=True), "shard"))
@@ -158,7 +165,7 @@ class CausalTransformer:
 
             eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply(ctx, tgt)
 
-            return eval_loss_fn(state["params"], ctx, tgt)
+            return eval_loss_fn(to_bf16(state["params"]), ctx, tgt)
 
         def train(state, ctx, tgt):
             def train_loss(x, y):
@@ -167,13 +174,13 @@ class CausalTransformer:
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
-            value, grad = jax.value_and_grad(train_loss_fn)(state["params"], ctx, tgt)
+            value, grad = jax.value_and_grad(train_loss_fn)(to_bf16(state["params"]), ctx, tgt)
             grad = jax.lax.pmean(grad, "batch")
 
             updates, new_opt_state = optimizer.update(grad, state["opt_state"])
 
             return value, {
-                "params": optax.apply_updates(state["params"], updates),
+                "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
                 "opt_state": new_opt_state
             }
@@ -188,7 +195,7 @@ class CausalTransformer:
             params = param_init_fn(key, x, x)
 
             return {
-                "params": params,
+                "params": to_f32(params),
                 "step": np.array(0),
                 "opt_state": optimizer.init(params)
             }
@@ -224,4 +231,4 @@ class CausalTransformer:
 
     def train(self, sample):
         loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
-        return loss
+        return np.array(loss)

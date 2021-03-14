@@ -32,10 +32,22 @@ it: 40, loss: 3.2406811714172363
 effective flops (not including attn): 2.31803e+14
 ```
 
+## 10B model
+```
+Initialized in 152.762s
+Total parameters: 10073579776
+Compiled in 92.6539s
+it: 0, loss: 5.3125
+<snip>
+it: 40, loss: 3.65625
+50 steps in 100.235s
+effective flops (not including attn): 2.46988e+14
+```
+
 # TODO
 - [x] disentangle heads and shards
 - [x] test/benchmark on TPU
 - [x] implement gradient checkpointing
 - [x] fix initialization
-- [ ] mixed precision
+- [x] mixed precision
 - [ ] shard activations instead of replicating
