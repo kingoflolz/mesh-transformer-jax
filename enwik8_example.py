@@ -1,14 +1,6 @@
 import os
 
-import jax
-import numpy as np
-import optax
-
-
 # Run with a bunch of CPU devices.
-from loader import TextLoader
-
-
 def setUpModule():
     global prev_xla_flags
     prev_xla_flags = os.getenv("XLA_FLAGS")
@@ -19,21 +11,26 @@ def setUpModule():
 
 setUpModule()
 
+import jax
+import numpy as np
+import optax
 
 from transformer_shard import CausalTransformer
 
-loader = TextLoader("data/enwik8", 8, 65)
+from loader import TextLoader
+
+loader = TextLoader("data/enwik8", 8, 64)
 
 devices = np.array(jax.devices()).reshape((2, 4))
 
-with jax.experimental.maps.mesh(devices, ('batch', 'shard')):
+with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     opt = optax.chain(
         optax.clip_by_global_norm(1),
         optax.scale_by_adam(eps=1e-4),
         optax.scale(-1e-4),
     )
 
-    c = CausalTransformer(128, 4, 4, 256, opt)
+    c = CausalTransformer(128, 8, 4, 256, opt)
 
     while True:
         sample = loader.get_samples()

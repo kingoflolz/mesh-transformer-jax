@@ -31,19 +31,21 @@ class EmbeddingShard(hk.Module):
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
 class TransformerLayerShard(hk.Module):
-    def __init__(self, dim, heads, name=None):
+    def __init__(self, dim, heads, shards, name=None):
         super().__init__(name=name)
         assert dim % heads == 0
+        assert heads % shards == 0
 
         self.dim = dim
         self.dim_per_head = dim // heads
-        self.heads = heads
+        self.heads_per_shard = heads // shards
+        self.dim_per_shard = dim // shards
 
         self.ln = hk.LayerNorm(-1, True, True)
 
-        self.q = hk.Linear(self.dim_per_head)
-        self.v = hk.Linear(self.dim_per_head)
-        self.k = hk.Linear(self.dim_per_head)
+        self.q = hk.Linear(self.dim_per_shard)
+        self.v = hk.Linear(self.dim_per_shard)
+        self.k = hk.Linear(self.dim_per_shard)
 
         self.o = hk.Linear(self.dim)
 
@@ -53,11 +55,11 @@ class TransformerLayerShard(hk.Module):
     def __call__(self, x, mask=None):
         x = self.ln(x)
 
-        q = self.q(x)
-        v = self.v(x)
-        k = self.k(x)
+        q = self.q(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
+        v = self.v(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
+        k = self.k(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
 
-        attention_logits = jnp.einsum("td,Td->tT", q, k)
+        attention_logits = jnp.einsum("thd,Thd->htT", q, k)
 
         sqrt_key_size = np.sqrt(self.dim_per_head).astype(k.dtype)
         attention_logits = attention_logits / sqrt_key_size
@@ -66,7 +68,7 @@ class TransformerLayerShard(hk.Module):
             attention_logits += mask
 
         attention_weights = jax.nn.softmax(attention_logits)
-        attention_vec = jnp.einsum("tT,Td->td", attention_weights, v)
+        attention_vec = jnp.einsum("htT,Thd->thd", attention_weights, v).reshape((-1, self.dim_per_shard))
 
         attn_out = self.o(attention_vec)
 
@@ -120,12 +122,14 @@ class CausalTransformerShard(hk.Module):
         self.transformer_layers = []
         self.heads = heads
 
-        self.embed = EmbeddingShard(vocab, dim, heads)
+        shards = thread_resources.env.shape['mp']
+
+        self.embed = EmbeddingShard(vocab, dim, shards)
 
         for i in range(layer_count):
-            self.transformer_layers.append(TransformerLayerShard(dim, heads))
+            self.transformer_layers.append(TransformerLayerShard(dim, heads, shards))
 
-        self.proj = ProjectionShard(vocab, heads)
+        self.proj = ProjectionShard(vocab, shards)
 
     def eval(self, context, target):
         x = self.embed(context)
@@ -193,28 +197,29 @@ class CausalTransformer:
                                                     in_axes=(["shard", ...],
                                                              ["batch", ...]),
                                                     out_axes=["shard", ...],
-                                                    axis_resources={'shard': 'shard', 'batch': 'batch'})
+                                                    axis_resources={'shard': 'mp', 'batch': 'dp'})
 
         self.eval_xmap = jax.experimental.maps.xmap(fun=eval,
                                                     in_axes=(["shard", ...],
                                                              ["batch", ...],
                                                              ["batch", ...]),
                                                     out_axes=["batch", ...],
-                                                    axis_resources={'shard': 'shard', 'batch': 'batch'})
+                                                    axis_resources={'shard': 'mp', 'batch': 'dp'})
 
         self.train_xmap = jax.experimental.maps.xmap(fun=train,
                                                      in_axes=(["shard", ...],
                                                               ["batch", ...],
                                                               ["batch", ...]),
                                                      out_axes=(["batch", ...], ["shard", ...]),
-                                                     axis_resources={'shard': 'shard', 'batch': 'batch'})
+                                                     axis_resources={'shard': 'mp', 'batch': 'dp'})
 
         key = hk.PRNGSequence(42)
 
-        dp = thread_resources.env.shape['batch']
+        dp = thread_resources.env.shape['dp']
+        mp = thread_resources.env.shape['mp']
         x = jax.random.uniform(next(key), (dp, 64,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
 
-        self.state = self.init_xmap(jnp.array(key.take(heads)), x)
+        self.state = self.init_xmap(jnp.array(key.take(mp)), x)
 
     def train(self, sample):
         loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
