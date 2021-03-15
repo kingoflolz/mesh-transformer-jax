@@ -10,6 +10,7 @@ from jax.experimental.maps import thread_resources
 def to_f32(t):
     return jax.tree_map(lambda x: x.astype(jnp.float32) if x.dtype == jnp.bfloat16 else x, t)
 
+
 def to_bf16(t):
     return jax.tree_map(lambda x: x.astype(jnp.bfloat16) if x.dtype == jnp.float32 else x, t)
 
