@@ -19,7 +19,7 @@ import util
 
 from transformer_shard import CausalTransformer
 
-from loader import TextLoader
+from enwik8_loader import TextLoader
 
 loader = TextLoader("data/enwik8", 512, 64)
 

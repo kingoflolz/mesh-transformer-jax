@@ -7,7 +7,7 @@ import haiku as hk
 
 from transformer_shard import CausalTransformer
 
-from loader import TextLoader
+from enwik8_loader import TextLoader
 
 bs = 8
 seq = 1024
