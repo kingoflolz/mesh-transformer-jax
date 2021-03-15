@@ -1,3 +1,4 @@
+import random
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -155,7 +156,7 @@ class CausalTransformerShard(hk.Module):
 
 
 class CausalTransformer:
-    def __init__(self, dim: int, heads: int, layer_count: int, vocab: int, optimizer):
+    def __init__(self, dim: int, heads: int, layer_count: int, vocab: int, optimizer: optax.GradientTransformation, deterministic: bool = True):
         self.heads = heads
 
         def eval(state, ctx, tgt):
@@ -179,7 +180,7 @@ class CausalTransformer:
 
             updates, new_opt_state = optimizer.update(grad, state["opt_state"])
 
-            return value, {
+            return to_f32(value), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
                 "opt_state": new_opt_state
@@ -221,7 +222,11 @@ class CausalTransformer:
                                                      donate_argnums=(0,),
                                                      axis_resources={'shard': 'mp', 'batch': 'dp'})
 
-        key = hk.PRNGSequence(42)
+
+        if deterministic:
+            key = hk.PRNGSequence(42 + jax.host_id())
+        else:
+            key = hk.PRNGSequence(random.randrange(1e9))
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
