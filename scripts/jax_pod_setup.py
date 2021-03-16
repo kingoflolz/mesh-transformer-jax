@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 
 
@@ -33,8 +34,8 @@ accelerator_type_to_host_bounds = {
     'v3-2048': '16,16,1',
 }
 
-os.environ['TPU_HOST_BOUNDS'] = accelerator_type_to_host_bounds[
-    accelerator_type]
-os.environ['TPU_MESH_CONTROLLER_ADDRESS'] = worker_network_endpoints.split(
-    ',')[0].split(':')[2] + ':8476'
+os.environ['TPU_HOST_BOUNDS'] = accelerator_type_to_host_bounds[accelerator_type]
+os.environ['TPU_MESH_CONTROLLER_ADDRESS'] = worker_network_endpoints.split(',')[0].split(':')[2] + ':8476'
 os.environ['TPU_MESH_CONTROLLER_PORT'] = '8476'
+
+os.system(f"ray start --address={sys.argv[1]} --resources='" + '{"tpu": 1}\'')

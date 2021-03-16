@@ -33,7 +33,7 @@ class TextLoader:
         obs = batch[:, :-1].astype(np.uint32)
         obs = obs.reshape(self.batch_shape + (self.ss,))
 
-        return {"target": target, "obs": obs}
+        return batch.astype(np.uint32)
 
 
 if __name__ == "__main__":

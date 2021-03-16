@@ -17,7 +17,7 @@ import optax
 import haiku as hk
 import util
 
-from transformer_shard import CausalTransformer
+from mesh_transformer.transformer_shard import CausalTransformer
 
 from enwik8_loader import TextLoader
 
