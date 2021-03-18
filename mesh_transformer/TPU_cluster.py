@@ -30,11 +30,4 @@ class TPUCluster:
                 "target": d[:, 1:],
             }))
 
-        print(np.array(ray.get(res)).mean())
-
-    def update(self, div):
-        res = []
-        for n in self.nodes:
-            res.append(n.update.remote(div))
-
-        ray.get(res)
+        return np.array(ray.get(res)).mean()

@@ -23,7 +23,7 @@ class TFRecordTokenizerDataset:
             for data, size in file:
                 data = np.array(data)
 
-                yield {"obs": data[:, :-1].astype(np.uint32), "target": data[:, 1:].astype(np.uint32)}
+                yield data.astype(np.uint32)
             self.used.append(i)
 
     def infinite(self):

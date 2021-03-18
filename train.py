@@ -2,6 +2,8 @@ import functools
 import multiprocessing
 import time
 
+from tensorboardX import SummaryWriter
+
 import optax
 import ray
 
@@ -14,11 +16,13 @@ from ray_tpu import start_ray, get_connection, create_tpu, wait_til, delete_tpu
 head_info = ray.init(dashboard_host="0.0.0.0")
 address = head_info['redis_address']
 
-# delete_tpu(f"mesh-transformer-test-0", "europe-west4-a")
-create_tpu(f"mesh-transformer-test-0", "europe-west4-a", "v3-32", True)
-assert wait_til(f"mesh-transformer-test-0", "europe-west4-a", {'state': 'READY', 'health': 'HEALTHY'})
+tpu_name = "mesh-transformer-test-2"
 
-conns = get_connection(f"mesh-transformer-test-0", "europe-west4-a")
+# delete_tpu(f"mesh-transformer-test-0", "europe-west4-a")
+create_tpu(tpu_name, "europe-west4-a", "v3-32", True)
+assert wait_til(tpu_name, "europe-west4-a", {'state': 'READY', 'health': 'HEALTHY'})
+
+conns = get_connection(tpu_name, "europe-west4-a")
 
 with multiprocessing.Pool(processes=4) as p:
     p.map(functools.partial(start_ray, address=address), conns)
@@ -32,14 +36,21 @@ opt = optax.chain(
     optax.scale_by_schedule(util.gpt3_schedule(1_000, 20_000, 1e-4, 1e-5))
 )
 
-model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=24, vocab=256, optimizer=opt)
+model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=24, vocab=256, seq=1024, optimizer=opt)
 
 t = TPUCluster((4, 8), 4, model_fn)
 
-i = 0
-while True:
-    t.train(train_dataset.get_samples())
+start = time.time()
+t.train(train_dataset.get_samples())
+print(f"Compiled in {time.time() - start:.06}s")
 
-    i += 1
+writer = SummaryWriter(flush_secs=5)
+
+step = 0
+while True:
+    loss = t.train(train_dataset.get_samples())
+    writer.add_scalar('train/loss', loss, step)
+
+    step += 1
 
 ray.shutdown()
