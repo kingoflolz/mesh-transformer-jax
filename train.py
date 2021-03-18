@@ -6,6 +6,7 @@ import optax
 import ray
 
 from enwik8_loader import TextLoader
+from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
 from mesh_transformer.transformer_shard import CausalTransformer
 from ray_tpu import start_ray, get_connection, create_tpu, wait_til, delete_tpu
@@ -25,20 +26,19 @@ with multiprocessing.Pool(processes=4) as p:
 train_dataset = TextLoader("data/enwik8", batchsize=(32,), sample_size=1024, length=90000000)
 
 opt = optax.chain(
-        optax.clip_by_global_norm(1),
-        optax.scale_by_adam(eps=1e-4),
-        optax.scale(-1e-4),
-    )
+    optax.clip_by_global_norm(1),
+    optax.scale_by_adam(eps=1e-4),
+    optax.scale(-1),
+    optax.scale_by_schedule(util.gpt3_schedule(1_000, 20_000, 1e-4, 1e-5))
+)
 
 model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=24, vocab=256, optimizer=opt)
 
-t = TPUCluster((1, 8), 4, model_fn)
+t = TPUCluster((4, 8), 4, model_fn)
 
 i = 0
 while True:
     t.train(train_dataset.get_samples())
-    if i % 8 == 0:
-        t.update(8)
 
     i += 1
 

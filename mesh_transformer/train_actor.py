@@ -1,5 +1,3 @@
-import threading
-
 import ray
 import time
 import numpy as np
@@ -16,6 +14,7 @@ class NetworkRunner(object):
         self.output_q = Queue(maxsize=1)
 
     def run(self):
+        print(f"jax runtime initialization starting")
         import jax
         from jax.experimental.maps import thread_resources, ResourceEnv, Mesh
         import haiku as hk
@@ -26,13 +25,13 @@ class NetworkRunner(object):
         print(jax.devices())
         print(jax.device_count())
         print(f"jax runtime initialized in {time.time() - start:.06}s")
-        devices = np.array(jax.local_devices()).reshape(self.mesh_shape)
+        devices = np.array(jax.devices()).reshape(self.mesh_shape)
         print(devices)
 
         with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
             start = time.time()
             network = self.network_builder()
-            param_count = hk.data_structures.tree_size(network.fast_state['params'])
+            param_count = hk.data_structures.tree_size(network.state['params'])
             print(f"Initialized in {time.time() - start:.06}s")
             print(f"Total parameters: {param_count}")
 

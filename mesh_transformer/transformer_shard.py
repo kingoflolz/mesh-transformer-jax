@@ -184,31 +184,13 @@ class CausalTransformer:
 
             value, grad = jax.value_and_grad(train_loss_fn)(to_bf16(state["params"]), ctx, tgt)
             grad = jax.lax.pmean(grad, "batch")
+            updates, new_opt_state = optimizer.update(grad, state["opt_state"])
 
             return to_f32(value), {
-                "params": state["params"],
-                "grad": jax.tree_multimap(lambda a, b: a + b, state["grad"], grad),
-            }
-
-        def update(fast_state, slow_state, div):
-            mp = thread_resources.env.shape['mp']
-            host_groups = np.array(jax.devices()).reshape((-1, mp)).transpose()
-
-            axis_index_group = []
-            for i in host_groups:
-                axis_index_group.append([device.id for device in i])
-
-            all_grad = jax.lax.pmean(fast_state["grad"], 'devices', axis_index_groups=axis_index_group)
-            all_grad = jax.tree_map(lambda x: x / div, all_grad)
-            updates, new_opt_state = optimizer.update(all_grad, slow_state["opt_state"])
-
-            return {
-                "params": optax.apply_updates(fast_state["params"], to_f32(updates)),
-                "grad": jax.tree_map(lambda x: jnp.zeros_like(x), to_bf16(updates)),
-            }, {
-                "step": slow_state["step"] + 1,
-                "opt_state": new_opt_state,
-            }
+                       "params": optax.apply_updates(state["params"], to_f32(updates)),
+                       "step": state["step"] + 1,
+                       "opt_state": new_opt_state,
+                   }
 
         def init(key, x):
             def train_loss(x, y):
@@ -221,8 +203,6 @@ class CausalTransformer:
 
             return {
                        "params": to_f32(params),
-                       "grad": jax.tree_map(lambda x: jnp.zeros_like(x), to_bf16(params))
-                   }, {
                        "step": np.array(0),
                        "opt_state": optimizer.init(params)
                    }
@@ -248,11 +228,6 @@ class CausalTransformer:
                                                      donate_argnums=(0,),
                                                      axis_resources={'shard': 'mp', 'batch': 'dp'})
 
-        self.update_pmap = jax.pmap(fun=update,
-                                    in_axes=(0, 0, None),
-                                    axis_name="devices",
-                                    donate_argnums=(0, 1))
-
         if deterministic:
             # key = hk.PRNGSequence(42 + jax.host_id())
             key = hk.PRNGSequence(42)  # we actually need this to be completely deterministic until xmap is fixed
@@ -262,7 +237,7 @@ class CausalTransformer:
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
-        x = jax.random.uniform(next(key), (dp, 64,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
+        x = jax.random.uniform(next(key), (1, 64,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
 
         print("key shape", jnp.array(key.take(mp)).shape)
         print("in shape", x.shape)
@@ -270,20 +245,14 @@ class CausalTransformer:
         print("dp", dp)
         print("mp", mp)
 
-        self.fast_state, self.slow_state = self.init_xmap(jnp.array(key.take(mp)), x)
+        self.state = self.init_xmap(jnp.array(key.take(mp)), x)
 
     def train(self, sample):
         # print("train iter")
         # print("sample", sample["obs"].shape)
         # print("target", sample["target"].shape)
         start = time.time()
-        loss, self.fast_state = self.train_xmap(self.fast_state, sample["obs"], sample["target"])
+        loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
         loss = np.array(loss)
-        print(f"iter done in {time.time() - start:.06}s")
+        # print(f"iter done in {time.time() - start:.06}s")
         return loss.mean()
-
-    def update(self, div):
-        start = time.time()
-        self.fast_state, self.slow_state = self.update_pmap(self.fast_state, self.slow_state, div)
-        np.array(self.slow_state["step"])
-        print(f"update done in {time.time() - start:.06}s")

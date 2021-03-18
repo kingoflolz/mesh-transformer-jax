@@ -27,11 +27,10 @@ class TextLoader:
         for i in range(self.ss + 1):
             batch[:, i] = self.np_mm[sample + i]
 
-        target = batch[:, 1:].astype(np.uint32)
-        target = target.reshape(self.batch_shape + (self.ss,))
-
-        obs = batch[:, :-1].astype(np.uint32)
-        obs = obs.reshape(self.batch_shape + (self.ss,))
+        # target = batch[:, 1:].astype(np.uint32)
+        # target = target.reshape(self.batch_shape + (self.ss,))
+        # obs = batch[:, :-1].astype(np.uint32)
+        # obs = obs.reshape(self.batch_shape + (self.ss,))
 
         return batch.astype(np.uint32)
 

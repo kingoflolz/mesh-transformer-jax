@@ -5,13 +5,14 @@ import numpy as np
 import optax
 import haiku as hk
 
-from transformer_shard import CausalTransformer
 
 from enwik8_loader import TextLoader
+from mesh_transformer import checkpoint
+from mesh_transformer.transformer_shard import CausalTransformer
 
 bs = 8
 seq = 1024
-it = 50
+it = 1000
 
 loader = TextLoader("data/enwik8", bs, seq)
 
@@ -31,7 +32,7 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     start = time.time()
     
     # 2.7B
-    # c = CausalTransformer(dim=3072, heads=8, layer_count=24, vocab=256, optimizer=opt)
+    c = CausalTransformer(dim=3072, heads=8, layer_count=12, vocab=256, optimizer=opt)
     
     # 4.8B
     # c = CausalTransformer(dim=4096, heads=32, layer_count=24, vocab=256, optimizer=opt)
@@ -40,7 +41,7 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     # c = CausalTransformer(dim=5120, heads=40, layer_count=32, vocab=256, optimizer=opt)
 
     # 8B-big-vocab
-    c = CausalTransformer(dim=5120, heads=40, layer_count=24, vocab=50400, optimizer=opt)
+    # c = CausalTransformer(dim=5120, heads=40, layer_count=24, vocab=50400, optimizer=opt)
 
     param_count = hk.data_structures.tree_size(c.state['params'])
 
@@ -48,22 +49,32 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     print(f"Total parameters: {param_count}")
 
     start = time.time()
+    for i in range(8):
+        checkpoint.write_ckpt(c.state, f"gs://neo-models/mesh_jax/shard_{i}/", i)
+    # checkpoint.write_ckpt((c.slow_state, c.fast_state), "gs://neo-models/mesh_jax/")
+    # checkpoint.write_ckpt((c.slow_state, c.fast_state), "gs://neo-models/mesh_jax/")
+    print(f"Checkpoint written in {time.time() - start:.06}s")
+
+    start = time.time()
     sample = loader.get_samples()
     loss = c.train(sample)
     print(f"Compiled in {time.time() - start:.06}s")
 
     start = time.time()
-    for i in range(it):
+    i = 0
+    while True:
         with jax.profiler.StepTraceContext("train", step_num=i):
             sample = loader.get_samples()
-            loss = c.train(sample)
-            if i % 10 == 0:
+            loss = c.train({
+                "obs": sample[:, :-1],
+                "target": sample[:, 1:],
+            })
+            if i % 100 == 0:
                 print(f"it: {i}, loss: {loss.mean()}")
-    total_time = time.time() - start
-    print(f"{it} steps in {total_time:.06}s")
 
-    weight_flops = bs * seq * it * param_count
-    attn_flops = bs * (seq**2) * it * 32 * 5120 * 16
-    print(f"effective flops (not including attn): {weight_flops * 6 / total_time:.06}")
-    print(f"MXU flops: {(weight_flops * 8 + attn_flops) / total_time:.06}")
-    jax.profiler.save_device_memory_profile("memory.pprof")
+            if i % 100 == 0:
+                start = time.time()
+                for j in range(8):
+                    checkpoint.write_ckpt(c.state, f"gs://neo-models/mesh_jax/shard_{j}/", j)
+                print(f"Checkpoint written in {time.time() - start:.06}s")
+        i += 1

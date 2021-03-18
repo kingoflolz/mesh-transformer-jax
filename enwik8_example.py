@@ -15,7 +15,7 @@ import jax
 import numpy as np
 import optax
 import haiku as hk
-import util
+from mesh_transformer import util, checkpoint
 
 from mesh_transformer.transformer_shard import CausalTransformer
 
@@ -35,12 +35,17 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
 
     c = CausalTransformer(dim=512, heads=8, layer_count=8, vocab=256, optimizer=opt)
 
-    print(f"Total parameters: {hk.data_structures.tree_size(c.state['params'])}")
+    print(f"Total parameters: {hk.data_structures.tree_size(c.fast_state['params'])}")
 
-    for i in range(2000):
-        sample = loader.get_samples()
-        loss = c.train(sample)
+    checkpoint.write_ckpt((c.slow_state, c.fast_state), "ckpt/0/")
+    checkpoint.write_ckpt((c.slow_state, c.fast_state), "ckpt/0/")
+    checkpoint.write_ckpt((c.slow_state, c.fast_state), "ckpt/0/")
 
-        print(f"it: {i}, loss: {loss.mean()}")
-
-    jax.profiler.save_device_memory_profile("memory.pprof")
+    # for i in range(2000):
+    #     sample = loader.get_samples()
+    #     loss = c.train(sample)
+#
+    #     print(f"it: {i}, loss: {loss.mean()}")
+#
+    # jax.profiler.save_device_memory_profile("memory.pprof")
+#
