@@ -21,13 +21,13 @@ class TPUCluster:
             n.run.remote()
 
     def train(self, data):
-        data_chunks = np.array_split(data, len(self.nodes))
+        data_chunks = np.array_split(data, len(self.nodes), axis=1)
 
         res = []
         for n, d in zip(self.nodes, data_chunks):
             res.append(n.train.remote({
-                "obs": d[:, :-1],
-                "target": d[:, 1:],
+                "obs": d[:, :, :-1],
+                "target": d[:, :, 1:],
             }))
 
         return np.array(ray.get(res)).mean()

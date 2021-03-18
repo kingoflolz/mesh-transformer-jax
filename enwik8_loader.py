@@ -32,6 +32,8 @@ class TextLoader:
         # obs = batch[:, :-1].astype(np.uint32)
         # obs = obs.reshape(self.batch_shape + (self.ss,))
 
+        batch = batch.reshape(self.batch_shape + (self.ss + 1,))
+
         return batch.astype(np.uint32)
 
 

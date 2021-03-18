@@ -16,18 +16,18 @@ from ray_tpu import start_ray, get_connection, create_tpu, wait_til, delete_tpu
 head_info = ray.init(dashboard_host="0.0.0.0")
 address = head_info['redis_address']
 
-tpu_name = "mesh-transformer-test-2"
+tpu_name = "mesh-transformer-test-3"
 
-# delete_tpu(f"mesh-transformer-test-0", "europe-west4-a")
-create_tpu(tpu_name, "europe-west4-a", "v3-32", True)
+# delete_tpu(tpu_name, "europe-west4-a")
+create_tpu(tpu_name, "europe-west4-a", "v3-128", True)
 assert wait_til(tpu_name, "europe-west4-a", {'state': 'READY', 'health': 'HEALTHY'})
 
 conns = get_connection(tpu_name, "europe-west4-a")
 
-with multiprocessing.Pool(processes=4) as p:
+with multiprocessing.Pool(processes=32) as p:
     p.map(functools.partial(start_ray, address=address), conns)
 
-train_dataset = TextLoader("data/enwik8", batchsize=(32,), sample_size=1024, length=90000000)
+train_dataset = TextLoader("data/enwik8", batchsize=(4, 256,), sample_size=1024, length=90000000)
 
 opt = optax.chain(
     optax.clip_by_global_norm(1),
@@ -38,7 +38,7 @@ opt = optax.chain(
 
 model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=24, vocab=256, seq=1024, optimizer=opt)
 
-t = TPUCluster((4, 8), 4, model_fn)
+t = TPUCluster((16, 8), 16, model_fn)
 
 start = time.time()
 t.train(train_dataset.get_samples())

@@ -243,11 +243,22 @@ class CausalTransformer:
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
-            value, grad = jax.value_and_grad(train_loss_fn)(to_bf16(state["params"]), ctx, tgt)
+            def microbatch(old_grad, batch):
+                ctx, tgt = batch
+                value, grad = jax.value_and_grad(train_loss_fn)(to_bf16(state["params"]), ctx, tgt)
+
+                new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
+                return new_grad, value
+
+            grad, losses = jax.lax.scan(microbatch,
+                                        jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
+                                                     state["params"]),
+                                        (ctx, tgt))
+
             grad = jax.lax.pmean(grad, "batch")
             updates, new_opt_state = optimizer.update(grad, state["opt_state"])
 
-            return to_f32(value), {
+            return to_f32(losses), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
                 "opt_state": new_opt_state,
@@ -318,5 +329,5 @@ class CausalTransformer:
         start = time.time()
         loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
         loss = np.array(loss)
-        # print(f"iter done in {time.time() - start:.06}s")
+        print(f"iter done in {time.time() - start:.06}s")
         return loss.mean()

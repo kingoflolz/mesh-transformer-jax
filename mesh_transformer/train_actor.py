@@ -18,6 +18,7 @@ class NetworkRunner(object):
         import jax
         from jax.experimental.maps import thread_resources, ResourceEnv, Mesh
         import haiku as hk
+        # jax.experimental.maps.EXPERIMENTAL_SPMD_LOWERING = True
 
         thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
 
