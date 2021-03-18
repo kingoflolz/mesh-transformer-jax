@@ -17,17 +17,23 @@ head_info = ray.init(dashboard_host="0.0.0.0")
 address = head_info['redis_address']
 
 tpu_name = "mesh-transformer-test-3"
+gradient_accumulation_steps = 4
+per_replica_batch = 16
+tpus_per_replica = 8
+tpu_size = 128
 
 # delete_tpu(tpu_name, "europe-west4-a")
-create_tpu(tpu_name, "europe-west4-a", "v3-128", True)
+create_tpu(tpu_name, "europe-west4-a", f"v3-{tpu_size}", True)
 assert wait_til(tpu_name, "europe-west4-a", {'state': 'READY', 'health': 'HEALTHY'})
 
 conns = get_connection(tpu_name, "europe-west4-a")
 
-with multiprocessing.Pool(processes=32) as p:
+with multiprocessing.Pool(processes=len(address)) as p:
     p.map(functools.partial(start_ray, address=address), conns)
 
-train_dataset = TextLoader("data/enwik8", batchsize=(4, 256,), sample_size=1024, length=90000000)
+train_dataset = TextLoader("data/enwik8",
+                           batchsize=(gradient_accumulation_steps, per_replica_batch * tpu_size // tpus_per_replica),
+                           sample_size=1024, length=90000000)
 
 opt = optax.chain(
     optax.clip_by_global_norm(1),
@@ -38,7 +44,7 @@ opt = optax.chain(
 
 model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=24, vocab=256, seq=1024, optimizer=opt)
 
-t = TPUCluster((16, 8), 16, model_fn)
+t = TPUCluster((tpu_size//tpus_per_replica, tpus_per_replica), len(address), model_fn)
 
 start = time.time()
 t.train(train_dataset.get_samples())
