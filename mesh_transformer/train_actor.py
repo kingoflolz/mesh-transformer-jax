@@ -3,6 +3,8 @@ import time
 import numpy as np
 from queue import Queue
 
+from mesh_transformer.checkpoint import write_ckpt, read_ckpt
+
 
 @ray.remote(resources={"tpu": 1})
 class NetworkRunner(object):
@@ -40,14 +42,24 @@ class NetworkRunner(object):
                 operation, input = self.input_q.get()
                 if operation == "train":
                     self.output_q.put(network.train(input))
-                elif operation == "update":
-                    network.update(input)
+                elif operation == "write_ckpt":
+                    path, shard = input
+                    write_ckpt(network.state, path, shard)
                     self.output_q.put(None)
+                elif operation == "load_ckpt":
+                    network.state = read_ckpt(network.state, input, devices.shape[1])
+                    self.output_q.put(network.state["step"][0])
+                else:
+                    raise Exception("Not implemented")
 
     def train(self, sample):
         self.input_q.put(("train", sample))
         return self.output_q.get()
 
-    def update(self, div):
-        self.input_q.put(("update", div))
-        self.output_q.get()
+    def write_ckpt(self, path, shard):
+        self.input_q.put(("write_ckpt", (path, shard)))
+        return self.output_q.get()
+
+    def load_ckpt(self, path):
+        self.input_q.put(("load_ckpt", path))
+        return self.output_q.get()
