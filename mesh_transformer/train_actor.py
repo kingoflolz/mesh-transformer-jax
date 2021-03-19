@@ -4,6 +4,7 @@ import numpy as np
 from queue import Queue
 
 from mesh_transformer.checkpoint import write_ckpt, read_ckpt
+from mesh_transformer.transformer_shard import CausalTransformer
 
 
 @ray.remote(resources={"tpu": 1})
@@ -25,15 +26,14 @@ class NetworkRunner(object):
         thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
 
         start = time.time()
-        print(jax.devices())
-        print(jax.device_count())
+        # print(jax.devices())
+        print(f"jax devices: {jax.device_count()}")
         print(f"jax runtime initialized in {time.time() - start:.06}s")
         devices = np.array(jax.devices()).reshape(self.mesh_shape)
-        print(devices)
 
         with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
             start = time.time()
-            network = self.network_builder()
+            network: CausalTransformer = self.network_builder()
             param_count = hk.data_structures.tree_size(network.state['params'])
             print(f"Initialized in {time.time() - start:.06}s")
             print(f"Total parameters: {param_count}")
@@ -42,6 +42,8 @@ class NetworkRunner(object):
                 operation, input = self.input_q.get()
                 if operation == "train":
                     self.output_q.put(network.train(input))
+                elif operation == "eval":
+                    self.output_q.put(network.eval(input))
                 elif operation == "write_ckpt":
                     path, shard = input
                     write_ckpt(network.state, path, shard)
@@ -54,6 +56,10 @@ class NetworkRunner(object):
 
     def train(self, sample):
         self.input_q.put(("train", sample))
+        return self.output_q.get()
+
+    def eval(self, sample):
+        self.input_q.put(("eval", sample))
         return self.output_q.get()
 
     def write_ckpt(self, path, shard):

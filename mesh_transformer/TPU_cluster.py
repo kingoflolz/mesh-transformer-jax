@@ -39,6 +39,18 @@ class TPUCluster:
 
         return np.array(ray.get(res)).mean()
 
+    def eval(self, data):
+        data_chunks = np.array_split(data, len(self.nodes), axis=0)
+
+        res = []
+        for n, d in zip(self.nodes, data_chunks):
+            res.append(n.eval.remote({
+                "obs": d[:, :-1],
+                "target": d[:, 1:],
+            }))
+
+        return np.array(ray.get(res)).mean()
+
     def load(self, bucket, path):
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:
             meta = json.load(f)
@@ -66,7 +78,7 @@ class TPUCluster:
             # check existing checkpoint folder does not exist, and delete it if it does
             for blob in client.list_blobs(bucket, prefix=f"{path}/"):
                 assert overwrite
-                print(f"deleting {blob.name}")
+                # print(f"deleting {blob.name}")
                 assert path in blob.name
                 blob.delete()
 
@@ -95,7 +107,7 @@ class TPUCluster:
             ckpt_to_delete = meta["checkpoints"].pop(0)
             print(f"deleting checkpoint {ckpt_to_delete}")
             for blob in client.list_blobs(bucket, prefix=f"{path}/step_{ckpt_to_delete}/"):
-                print(f"deleting {blob.name}")
+                # print(f"deleting {blob.name}")
                 assert path in blob.name
                 blob.delete()
 

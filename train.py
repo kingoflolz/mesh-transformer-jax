@@ -1,3 +1,4 @@
+import argparse
 import functools
 import multiprocessing
 import time
@@ -5,10 +6,15 @@ import time
 # from tensorboardX import SummaryWriter
 import wandb
 
+import numpy as np
 import optax
 import ray
 
-from enwik8_loader import TextLoader
+# from enwik8_loader import TextLoader
+from tqdm import tqdm
+
+from tfrecord_loader import TFRecordNewInputs
+
 from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
 from mesh_transformer.transformer_shard import CausalTransformer
@@ -19,12 +25,13 @@ address = head_info['redis_address']
 
 tpu_name = "mesh-transformer-test-0"
 bucket = "neo-models"
-model_dir = "mesh_jax1"
+model_dir = "mesh_jax_owt"
 gradient_accumulation_steps = 1
 per_replica_batch = 8
 tpus_per_replica = 8
 tpu_size = 32
-clean_start = False
+clean_start = True
+val_batches = 100
 
 assert tpu_size in [8, 32, 128, 256, 512]
 
@@ -37,9 +44,19 @@ conns = get_connection(tpu_name, "europe-west4-a")
 with multiprocessing.Pool(processes=len(conns)) as p:
      p.map(functools.partial(start_ray, address=address), conns)
 
-train_dataset = TextLoader("data/enwik8",
-                           batchsize=(gradient_accumulation_steps, per_replica_batch * tpu_size // tpus_per_replica),
-                           sample_size=1024, length=90000000)
+
+# train_dataset = TextLoader("data/enwik8",
+#                            batch_size=dataloader_batch,
+#                            sample_size=1024, length=90000000)
+
+train_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.train.index",
+                                  batch_size=(gradient_accumulation_steps, per_replica_batch * tpu_size // tpus_per_replica),
+                                  sample_size=1024)
+
+val_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.val.index",
+                                batch_size=(per_replica_batch * tpu_size // tpus_per_replica, ),
+                                sample_size=1024)
+
 
 opt = optax.chain(
     optax.scale(1/gradient_accumulation_steps),
@@ -49,7 +66,7 @@ opt = optax.chain(
     optax.scale_by_schedule(util.gpt3_schedule(1_000, 20_000, 1e-4, 1e-5))
 )
 
-model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=1, vocab=256, seq=1024, optimizer=opt)
+model_fn = functools.partial(CausalTransformer, dim=4096, heads=32, layer_count=1, vocab=50400, seq=1024, optimizer=opt)
 
 t = TPUCluster((tpu_size//tpus_per_replica, tpus_per_replica), len(conns), model_fn)
 try:
@@ -61,7 +78,11 @@ except Exception as e:
 
 start = time.time()
 t.train(train_dataset.get_samples())
-print(f"Compiled in {time.time() - start:.06}s")
+print(f"Train fn in {time.time() - start:.06}s")
+
+start = time.time()
+t.eval(val_dataset.get_samples())
+print(f"Eval fn compiled in {time.time() - start:.06}s")
 
 # writer = SummaryWriter(flush_secs=5)
 wandb.init(project='mesh-transformer-jax', entity="eleutherai")
@@ -77,6 +98,16 @@ while True:
     wandb.log({'train/loss': loss}, step)
 
     if step % 100 == 0 and step:
+        val_loss = []
+        for i, _ in tqdm(zip(val_dataset.sample_once(), range(val_batches)), desc=f"validation for step {step}", total=val_batches):
+            val_loss.append(t.eval(i))
+
+        val_loss = np.array(val_loss).mean()
+
+        print(f"validation loss for step {step}: {val_loss}")
+
+        wandb.log({'val/loss': val_loss}, step)
+
         t.save(step, bucket, model_dir, init=False)
 
     step += 1

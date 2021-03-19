@@ -77,6 +77,7 @@ def read_shard(ckpt_dir):
 def read_ckpt(pytree, dir, total_shards):
     old_flattened, structure = jax.tree_flatten(pytree)
 
+    # TODO: figure out how to use a process pool here for more speed
     with multiprocessing.pool.ThreadPool(total_shards) as p:
         start = time.time()
         shards = list((p.imap(read_shard, [f"{dir}shard_{i}/" for i in range(total_shards)])))

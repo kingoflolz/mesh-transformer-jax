@@ -6,16 +6,16 @@ import numpy as np
 
 
 class TextLoader:
-    def __init__(self, fname, batchsize, sample_size, offset=0, length=0):
+    def __init__(self, fname, batch_size, sample_size, offset=0, length=0):
         self.f = open(fname, "r+b")
         self.mm = mmap.mmap(self.f.fileno(), length=length, offset=offset)
         self.file_size = os.stat(fname).st_size
-        self.bs = np.product(batchsize)
+        self.bs = np.product(batch_size)
 
-        if isinstance(batchsize, tuple):
-            self.batch_shape = batchsize
+        if isinstance(batch_size, tuple):
+            self.batch_shape = batch_size
         else:
-            self.batch_shape = (batchsize,)
+            self.batch_shape = (batch_size,)
         self.ss = sample_size
 
         self.np_mm = np.memmap(fname, dtype='uint8', mode='r', shape=(self.file_size,))
@@ -38,7 +38,7 @@ class TextLoader:
 
 
 if __name__ == "__main__":
-    tl = TextLoader("data/enwik9", batchsize=(8, 128), sample_size=128)
+    tl = TextLoader("data/enwik9", batch_size=(8, 128), sample_size=128)
     np.sum(tl.np_mm)
     print("preload done")
 

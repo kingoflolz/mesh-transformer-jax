@@ -217,7 +217,7 @@ class CausalTransformerShard(hk.Module):
 
         return hk.remat(self.proj.loss)(x, target)
 
-    def train_loss(self, ctx, tgt):
+    def loss(self, ctx, tgt):
         return self.eval(ctx, tgt).mean()
 
 
@@ -230,16 +230,16 @@ class CausalTransformer:
         def eval(state, ctx, tgt):
             def eval_loss(x, y):
                 transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
-                return transformer.eval(x, y)
+                return transformer.loss(x, y)
 
-            eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply(ctx, tgt)
+            eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply
 
             return eval_loss_fn(to_bf16(state["params"]), ctx, tgt)
 
         def train(state, ctx, tgt):
             def train_loss(x, y):
                 transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
-                return transformer.train_loss(x, y)
+                return transformer.loss(x, y)
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
@@ -267,7 +267,7 @@ class CausalTransformer:
         def init(key, x):
             def train_loss(x, y):
                 transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
-                return transformer.train_loss(x, y)
+                return transformer.loss(x, y)
 
             param_init_fn = hk.transform(train_loss).init
 
@@ -323,11 +323,23 @@ class CausalTransformer:
         # print("train iter")
         # print("sample", sample["obs"])
         # print("target", sample["target"])
+        # print("train sample", sample["obs"].shape)
+        # print("train target", sample["target"].shape)
 
         # assert (sample["obs"][:, 1:] == sample["target"][:, -1])
 
         start = time.time()
         loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
         loss = np.array(loss)
-        print(f"iter done in {time.time() - start:.06}s")
+        # print(f"iter done in {time.time() - start:.06}s")
+        return loss.mean()
+
+    def eval(self, sample):
+        # print("eval sample", sample["obs"].shape)
+        # print("eval target", sample["target"].shape)
+
+        start = time.time()
+        loss = self.eval_xmap(self.state, sample["obs"], sample["target"])
+        loss = np.array(loss)
+        # print(f"eval done in {time.time() - start:.06}s")
         return loss.mean()
