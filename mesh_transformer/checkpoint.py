@@ -15,6 +15,7 @@ from smart_open import open
 
 pieces = 16 # how many files to split each shard across
 
+
 @functools.partial(jax.jit, backend="cpu")
 def index_weights(weights, idx):
     cpu_device = jax.devices("cpu")[0]

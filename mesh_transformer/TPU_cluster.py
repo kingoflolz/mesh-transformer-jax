@@ -75,6 +75,9 @@ class TPUCluster:
         assert path
         client = storage.Client()
 
+        if aux is None:
+            aux = {}
+
         if init:
             # check existing checkpoint folder does not exist, and delete it if it does
             for blob in client.list_blobs(bucket, prefix=f"{path}/"):
@@ -110,7 +113,7 @@ class TPUCluster:
             ckpt_to_delete = meta["checkpoints"].pop(0)
 
             try:
-                del all_aux[step]
+                del all_aux[str(ckpt_to_delete)]
             except:
                 print(f"failed to delete the aux state for {step}")
 

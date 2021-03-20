@@ -256,7 +256,7 @@ class CausalTransformer:
                                         (ctx, tgt))
 
             grad = jax.lax.pmean(grad, "batch")
-            updates, new_opt_state = optimizer.update(grad, state["opt_state"])
+            updates, new_opt_state = optimizer.update(grad, state["opt_state"], state["params"])
 
             return to_f32(losses), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),

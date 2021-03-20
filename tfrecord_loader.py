@@ -29,7 +29,7 @@ class TFRecordNewInputs:
             return tf.sparse.to_dense(tf.sparse.reorder(parsed_features["text"])), parsed_features["text"].dense_shape[0]
 
         for i in self.clean_index:
-            file = tf.data.TFRecordDataset(i).map(tf_parse).batch(np.prod(self.bs))
+            file = tf.data.TFRecordDataset(i).map(tf_parse).batch(np.prod(self.bs), drop_remainder=True)
             for file_idx, (data, size) in enumerate(file):
                 data = np.array(data)
                 assert data.shape[-1] == self.seq + 1
