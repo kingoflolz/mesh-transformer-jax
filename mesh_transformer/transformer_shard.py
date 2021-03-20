@@ -323,13 +323,16 @@ class CausalTransformer:
         # print("train iter")
         # print("sample", sample["obs"])
         # print("target", sample["target"])
-        # print("train sample", sample["obs"].shape)
-        # print("train target", sample["target"].shape)
+        obs = jnp.transpose(sample["obs"], (1, 0, 2))
+        target = jnp.transpose(sample["target"], (1, 0, 2))
+
+        # print("train sample", obs.shape)
+        # print("train target", target.shape)
 
         # assert (sample["obs"][:, 1:] == sample["target"][:, -1])
 
         start = time.time()
-        loss, self.state = self.train_xmap(self.state, sample["obs"], sample["target"])
+        loss, self.state = self.train_xmap(self.state, obs, target)
         loss = np.array(loss)
         # print(f"iter done in {time.time() - start:.06}s")
         return loss.mean()

@@ -1,0 +1,33 @@
+{
+  "layers": 8,
+  "d_model": 512,
+  "n_heads": 4,
+  "n_vocab": 50400,
+
+  "seq": 1024,
+  "cores_per_replica": 2,
+  "per_replica_batch": 32,
+  "gradient_accumulation_steps": 1,
+
+  "warmup_steps": 3000,
+  "anneal_steps": 50000,
+  "lr": 0.00086178085690421424,
+  "end_lr": 0.00008617808569042142,
+  "weight_decay": 0.1,
+  "total_steps": 50000,
+
+  "tpu_size": 32,
+
+  "bucket": "neo-models",
+  "model_dir": "mesh_jax_exp1",
+
+  "train_set": "openwebtext2_new_inputs.train.index",
+  "val_set": "openwebtext2_new_inputs.val.index",
+
+  "val_batches": 100,
+  "val_every": 5000,
+  "ckpt_every": 5000,
+
+  "name": "Base",
+  "comment": "The config Aran and Sid to compare to MTF, for use on a v3-32"
+}
