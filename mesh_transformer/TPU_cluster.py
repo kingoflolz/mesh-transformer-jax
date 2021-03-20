@@ -55,22 +55,23 @@ class TPUCluster:
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:
             meta = json.load(f)
 
-        step = meta["checkpoints"][-1]
+        ckpt_step = meta["checkpoints"][-1]
 
         # do replicated checkpoint reading
         start = time.time()
         res = []
         for node in self.nodes:
-            res.append(node.load_ckpt.remote(f"gs://{bucket}/{path}/step_{step}/"))
+            res.append(node.load_ckpt.remote(f"gs://{bucket}/{path}/step_{ckpt_step}/"))
 
         # make sure they all read from the same checkpoint
         step = np.array(ray.get(res))
         assert (step[0] == step).all()
+        step = int(step[0])
 
-        print(f"Checkpoint@step{step[0]} restored in {time.time() - start:.06}s")
-        return int(step[0])
+        print(f"Checkpoint@step{step} restored in {time.time() - start:.06}s")
+        return step, meta["aux"][str(ckpt_step)]
 
-    def save(self, step, bucket, path, init=False, overwrite=False, keep_n=3):
+    def save(self, step, bucket, path, aux=None, init=False, overwrite=False, keep_n=3):
         assert path
         client = storage.Client()
 
@@ -86,7 +87,8 @@ class TPUCluster:
             with open(f"gs://{bucket}/{path}/meta.json", "w") as f:
                 json.dump({
                     "step": 0,
-                    "checkpoints": []
+                    "checkpoints": [],
+                    "aux": {}
                 }, f)
 
         # do sharded checkpoint writing
@@ -102,14 +104,24 @@ class TPUCluster:
 
         meta["step"] = step
         meta["checkpoints"].append(step)
+        all_aux = meta.get("aux", {})
 
         while len(meta["checkpoints"]) > keep_n:
             ckpt_to_delete = meta["checkpoints"].pop(0)
+
+            try:
+                del all_aux[step]
+            except:
+                print(f"failed to delete the aux state for {step}")
+
             print(f"deleting checkpoint {ckpt_to_delete}")
             for blob in client.list_blobs(bucket, prefix=f"{path}/step_{ckpt_to_delete}/"):
                 # print(f"deleting {blob.name}")
                 assert path in blob.name
                 blob.delete()
+
+        all_aux[step] = aux
+        meta["aux"] = all_aux
 
         with open(f"gs://{bucket}/{path}/meta.json", "w") as f:
             json.dump(meta, f)

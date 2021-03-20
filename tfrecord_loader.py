@@ -3,16 +3,18 @@ import numpy as np
 
 
 class TFRecordNewInputs:
-    def __init__(self, index_fname, batch_size, sample_size, used=None, file_idx=0):
-        if used is None:
-            used = []
-
-        self.file_idx = file_idx
-        self.file_idx_init = False
+    def __init__(self, index_fname, batch_size, sample_size, restore_state=None):
+        if restore_state is not None:
+            self.file_idx = restore_state["file_idx"]
+            self.file_idx_init = False
+            self.used = restore_state["used"]
+        else:
+            self.file_idx = 0
+            self.file_idx_init = True
+            self.used = []
 
         self.index = open(index_fname).read().splitlines()
-        self.clean_index = list(filter(lambda x: x not in used, self.index))
-        self.used = used
+        self.clean_index = list(filter(lambda x: x not in self.used, self.index))
         self.bs = batch_size
         self.seq = sample_size
 
@@ -33,6 +35,8 @@ class TFRecordNewInputs:
                 assert data.shape[-1] == self.seq + 1
 
                 if not self.file_idx_init and file_idx <= self.file_idx:
+                    if file_idx % 1000 == 0:
+                        print(f"skipping to batch {self.file_idx}, currently at {file_idx}")
                     continue
                 self.file_idx_init = True
                 self.file_idx = file_idx
@@ -47,6 +51,12 @@ class TFRecordNewInputs:
         except StopIteration:
             self.sample_fn = self.sample_once()
             return self.get_samples()
+
+    def get_state(self):
+        return {
+            "used": self.used,
+            "file_idx": self.file_idx
+        }
 
 
 if __name__ == "__main__":

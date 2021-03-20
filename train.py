@@ -30,7 +30,7 @@ gradient_accumulation_steps = 1
 per_replica_batch = 8
 tpus_per_replica = 8
 tpu_size = 32
-clean_start = True
+clean_start = False
 val_batches = 100
 
 assert tpu_size in [8, 32, 128, 256, 512]
@@ -49,15 +49,6 @@ with multiprocessing.Pool(processes=len(conns)) as p:
 #                            batch_size=dataloader_batch,
 #                            sample_size=1024, length=90000000)
 
-train_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.train.index",
-                                  batch_size=(gradient_accumulation_steps, per_replica_batch * tpu_size // tpus_per_replica),
-                                  sample_size=1024)
-
-val_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.val.index",
-                                batch_size=(per_replica_batch * tpu_size // tpus_per_replica, ),
-                                sample_size=1024)
-
-
 opt = optax.chain(
     optax.scale(1/gradient_accumulation_steps),
     optax.clip_by_global_norm(1),
@@ -72,9 +63,24 @@ t = TPUCluster((tpu_size//tpus_per_replica, tpus_per_replica), len(conns), model
 try:
     t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
     step = 0
+    train_load_restore = None
 except Exception as e:
     print(f"Save failed with error {e}, trying to load instead...", e)
-    step = t.load(bucket, model_dir)
+    step, aux = t.load(bucket, model_dir)
+    train_load_restore = aux.get("train_loader", None)
+
+    if train_load_restore is None:
+        print("Failed to restore train loader state")
+
+
+train_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.train.index",
+                                  batch_size=(gradient_accumulation_steps, per_replica_batch * tpu_size // tpus_per_replica),
+                                  sample_size=1024,
+                                  restore_state=train_load_restore)
+
+val_dataset = TFRecordNewInputs("data/openwebtext2_new_inputs.val.index",
+                                batch_size=(per_replica_batch * tpu_size // tpus_per_replica, ),
+                                sample_size=1024)
 
 start = time.time()
 t.train(train_dataset.get_samples())
@@ -108,7 +114,7 @@ while True:
 
         wandb.log({'val/loss': val_loss}, step)
 
-        t.save(step, bucket, model_dir, init=False)
+        t.save(step, bucket, model_dir, aux={"train_loader": train_dataset.get_state()}, init=False)
 
     step += 1
 
