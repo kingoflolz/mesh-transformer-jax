@@ -11,6 +11,7 @@ from mesh_transformer.train_actor import NetworkRunner
 from google.cloud import storage
 from smart_open import open
 
+
 class TPUCluster:
     def __init__(self,
                  mesh_shape,

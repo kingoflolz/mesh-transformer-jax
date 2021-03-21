@@ -91,7 +91,7 @@ if __name__ == "__main__":
     opt = optax.chain(
         optax.scale(1/gradient_accumulation_steps),
         optax.clip_by_global_norm(1),
-        optax.scale_by_adam(eps=1e-4),
+        optax.scale_by_adam(),
         optax.additive_weight_decay(weight_decay),
         optax.scale(-1),
         optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))

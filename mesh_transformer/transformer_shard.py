@@ -82,12 +82,12 @@ class EmbeddingShard(hk.Module):
         shard_start_index = jax.lax.axis_index('shard') * self.in_dim_per_shard
         shard_index = jnp.arange(0, self.in_dim_per_shard) + shard_start_index
 
-        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(dtype))
+        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(jnp.float32)).astype(dtype)
 
         # all_pos_embed = jax.lax.all_gather(self.positional_embeddings, 'shard')
         # all_pos_embed = hk.Flatten()(jnp.transpose(all_pos_embed, (1, 0, 2)))
 
-        return jax.lax.pmean(proj_out, "shard")  # + all_pos_embed
+        return jax.lax.psum(proj_out, "shard")  # + all_pos_embed
 
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
@@ -143,7 +143,7 @@ class TransformerLayerShard(hk.Module):
         dense_proj = jax.nn.gelu(dense_proj)
         dense_out = self.dense_proj_o(dense_proj)
 
-        return jax.lax.pmean(attn_out + dense_out, "shard")
+        return jax.lax.psum(attn_out + dense_out, "shard")
 
 
 class ProjectionShard(hk.Module):
@@ -173,7 +173,7 @@ class ProjectionShard(hk.Module):
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
         shard_index = jnp.arange(0, self.dim_per_shard) + shard_start_index
 
-        gt_onehot = (shard_index.reshape(1, -1) == targets.reshape(-1, 1)).astype(dtype)
+        gt_onehot = (shard_index.reshape(1, -1) == targets.reshape(-1, 1)).astype(jnp.float32)
 
         shifted = shard_logits - jax.lax.stop_gradient(
             jax.lax.pmax(jax.lax.stop_gradient(shard_logits.max(-1, keepdims=True)), "shard"))
