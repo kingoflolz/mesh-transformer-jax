@@ -16,6 +16,26 @@ def to_bf16(t):
     return jax.tree_map(lambda x: x.astype(jnp.bfloat16) if x.dtype == jnp.float32 else x, t)
 
 
+class ReplicatedLayerNorm(hk.Module):
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        mean = jnp.mean(inputs, axis=-1, keepdims=True)
+        variance = jnp.var(inputs, axis=-1, keepdims=True)
+
+        param_shape = inputs.shape[-1:]
+        scale = hk.get_parameter("scale", param_shape, inputs.dtype, init=jnp.ones)
+        offset = hk.get_parameter("offset", param_shape, inputs.dtype, init=jnp.zeros)
+
+        scale = jax.lax.pmean(scale, "shard")
+        offset = jax.lax.pmean(offset, "shard")
+
+        scale = jnp.broadcast_to(scale, inputs.shape)
+        offset = jnp.broadcast_to(offset, inputs.shape)
+        mean = jnp.broadcast_to(mean, inputs.shape)
+
+        inv = scale * jax.lax.rsqrt(variance + 1e-5)
+        return inv * (inputs - mean) + offset
+
+
 class RelativePositionEmbs(hk.Module):
     @staticmethod
     def _relative_position_bucket(relative_position,
@@ -44,14 +64,16 @@ class RelativePositionEmbs(hk.Module):
         memory_position = np.arange(klen, dtype=jnp.int32)[None, :]
         relative_position = memory_position - context_position  # shape (qlen, klen)
         rp_bucket = self._relative_position_bucket(relative_position)
-        relative_attention_bias = hk.get_parameter('rel_embedding', [heads, num_buckets], init=hk.initializers.TruncatedNormal(stddev=0.02))
+        relative_attention_bias = hk.get_parameter('rel_embedding', [heads, num_buckets],
+                                                   init=hk.initializers.TruncatedNormal(stddev=0.02))
         # Instead of using a slow gather, we create a leading-dimension one-hot
         # array from rp_bucket and use it to perform the gather-equivalent via a
         # contraction, i.e.:
         # (num_head, num_buckets) x (num_buckets one-hot, qlen, klen).
         # This is equivalent to relative_attention_bias[:, rp_bucket]
         bcast_iota = jax.lax.broadcasted_iota(jnp.int32, (num_buckets, 1, 1), 0)
-        rp_bucket_one_hot = jnp.array(rp_bucket[jnp.newaxis, Ellipsis] == bcast_iota).astype(relative_attention_bias.dtype)
+        rp_bucket_one_hot = jnp.array(rp_bucket[jnp.newaxis, Ellipsis] == bcast_iota).astype(
+            relative_attention_bias.dtype)
         # --> shape (qlen, klen, num_heads)
         values = jax.lax.dot_general(
             relative_attention_bias,
@@ -102,7 +124,7 @@ class TransformerLayerShard(hk.Module):
         self.heads_per_shard = heads // shards
         self.dim_per_shard = dim // shards
 
-        self.ln = hk.LayerNorm(-1, True, True)
+        self.ln = ReplicatedLayerNorm()
 
         self.q = hk.Linear(self.dim_per_shard, with_bias=False)
         self.v = hk.Linear(self.dim_per_shard, with_bias=False)
@@ -155,7 +177,7 @@ class ProjectionShard(hk.Module):
         self.dim_per_shard = out_dim // shards
         self.shards = shards
 
-        self.ln = hk.LayerNorm(-1, True, True)
+        self.ln = ReplicatedLayerNorm()
 
         self.proj = hk.Linear(self.dim_per_shard)
 
@@ -309,7 +331,7 @@ class CausalTransformer:
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
-        x = jax.random.uniform(next(key), (dp//jax.host_count(), seq,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
+        x = jax.random.uniform(next(key), (dp // jax.host_count(), seq,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
 
         print("key shape", jnp.array(key.take(mp)).shape)
         print("in shape", x.shape)

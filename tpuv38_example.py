@@ -31,7 +31,7 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
 
     start = time.time()
 
-    c = CausalTransformer(dim=1024, heads=8, layer_count=20, vocab=50400, seq=1024, optimizer=opt)
+    # c = CausalTransformer(dim=1024, heads=8, layer_count=20, vocab=50400, seq=1024, optimizer=opt)
 
     # 2.7B
     # c = CausalTransformer(dim=3072, heads=8, layer_count=12, vocab=256, optimizer=opt)
@@ -43,7 +43,7 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     # c = CausalTransformer(dim=5120, heads=40, layer_count=32, vocab=256, optimizer=opt)
 
     # 8B-big-vocab
-    # c = CausalTransformer(dim=5120, heads=40, layer_count=24, vocab=50400, optimizer=opt)
+    c = CausalTransformer(dim=5120, heads=40, layer_count=24, vocab=50400, seq=1024, optimizer=opt)
 
     param_count = hk.data_structures.tree_size(c.state['params'])
 
