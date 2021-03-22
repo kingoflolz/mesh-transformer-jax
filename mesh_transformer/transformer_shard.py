@@ -189,8 +189,8 @@ class ProjectionShard(hk.Module):
 
         return hk.Flatten()(jnp.transpose(all_proj, (1, 0, 2)))
 
-    def loss(self, x, targets, dtype=jnp.bfloat16):
-        shard_logits = self.proj(x)
+    def loss(self, x, targets, dtype=jnp.bfloat16, z_loss=False):
+        shard_logits = self.proj(x).astype(jnp.float32)
 
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
         shard_index = jnp.arange(0, self.dim_per_shard) + shard_start_index
@@ -202,6 +202,9 @@ class ProjectionShard(hk.Module):
         logsoftmax = shifted - jnp.log(jax.lax.psum(jnp.sum(jnp.exp(shifted), -1, keepdims=True), "shard"))
 
         loss = jax.lax.psum(-jnp.sum(gt_onehot * logsoftmax, axis=-1), "shard")
+
+        if z_loss:
+            loss += 1e-4 * jnp.square(logsoftmax)
 
         return loss
 
@@ -226,7 +229,7 @@ class CausalTransformerShard(hk.Module):
         self.proj = ProjectionShard(vocab, shards)
         self.rpe = RelativePositionEmbs()
 
-    def eval(self, context, target):
+    def eval(self, context, target, z_loss=False):
         input_len = context.shape[0]
 
         attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
@@ -237,10 +240,10 @@ class CausalTransformerShard(hk.Module):
         for l in self.transformer_layers:
             x = x + hk.remat(l)(x, attn_bias)
 
-        return hk.remat(self.proj.loss)(x, target)
+        return hk.remat(self.proj.loss)(x, target, z_loss)
 
-    def loss(self, ctx, tgt):
-        return self.eval(ctx, tgt).mean()
+    def loss(self, ctx, tgt, z_loss=False):
+        return self.eval(ctx, tgt, z_loss).mean()
 
 
 class CausalTransformer:
@@ -261,7 +264,7 @@ class CausalTransformer:
         def train(state, ctx, tgt):
             def train_loss(x, y):
                 transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
-                return transformer.loss(x, y)
+                return transformer.loss(x, y, z_loss=True)
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
