@@ -4,17 +4,16 @@ import json
 import multiprocessing
 import time
 
-import wandb
-from tqdm import tqdm
-
 import numpy as np
 import optax
 import ray
+import wandb
+from tqdm import tqdm
 
 from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
 from mesh_transformer.transformer_shard import CausalTransformer
-from ray_tpu import start_ray, get_connection, create_tpu, wait_til, delete_tpu
+from ray_tpu import start_ray, get_connection, create_tpu, wait_til
 from tfrecord_loader import TFRecordNewInputs
 
 
@@ -60,6 +59,7 @@ if __name__ == "__main__":
     n_heads = params["n_heads"]
     n_vocab = params["n_vocab"]
     seq = params["seq"]
+    norm = params["norm"]
 
     val_batches = params["val_batches"]
     val_every = params["val_every"]
@@ -86,10 +86,10 @@ if __name__ == "__main__":
     address = head_info['redis_address']
 
     with multiprocessing.Pool(processes=len(conns)) as p:
-         p.map(functools.partial(start_ray, address=address), conns)
+        p.map(functools.partial(start_ray, address=address), conns)
 
     opt = optax.chain(
-        optax.scale(1/gradient_accumulation_steps),
+        optax.scale(1 / gradient_accumulation_steps),
         optax.clip_by_global_norm(1),
         optax.scale_by_adam(),
         optax.additive_weight_decay(weight_decay),
@@ -97,13 +97,9 @@ if __name__ == "__main__":
         optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))
     )
 
-    model_fn = functools.partial(CausalTransformer,
-                                 dim=d_model,
-                                 heads=n_heads,
-                                 layer_count=layers,
-                                 vocab=n_vocab,
-                                 seq=seq,
-                                 optimizer=opt)
+    params["optimizer"] = opt
+
+    model_fn = functools.partial(CausalTransformer, params)
 
     t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn)
     try:
@@ -119,7 +115,8 @@ if __name__ == "__main__":
             print("Failed to restore train loader state")
 
     train_dataset = TFRecordNewInputs(f"data/{params['train_set']}",
-                                      batch_size=(gradient_accumulation_steps, per_replica_batch * tpu_size // cores_per_replica),
+                                      batch_size=(
+                                      gradient_accumulation_steps, per_replica_batch * tpu_size // cores_per_replica),
                                       sample_size=1024,
                                       restore_state=train_load_restore)
 
@@ -160,4 +157,3 @@ if __name__ == "__main__":
 
     ray.shutdown()
     delete_tpu(tpu_name, region)
-

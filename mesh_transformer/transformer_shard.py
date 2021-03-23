@@ -17,15 +17,19 @@ def to_bf16(t):
 
 
 class ReplicatedLayerNorm(hk.Module):
+    def __init__(self, offset=True):
+        super().__init__()
+        self.offset = offset
+
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
         mean = jnp.mean(inputs, axis=-1, keepdims=True)
         variance = jnp.var(inputs, axis=-1, keepdims=True)
 
         param_shape = inputs.shape[-1:]
         scale = hk.get_parameter("scale", param_shape, inputs.dtype, init=jnp.ones)
-        offset = hk.get_parameter("offset", param_shape, inputs.dtype, init=jnp.zeros)
-
         scale = jax.lax.pmean(scale, "shard")
+
+        offset = hk.get_parameter("offset", param_shape, inputs.dtype, init=jnp.zeros)
         offset = jax.lax.pmean(offset, "shard")
 
         scale = jnp.broadcast_to(scale, inputs.shape)
@@ -33,7 +37,49 @@ class ReplicatedLayerNorm(hk.Module):
         mean = jnp.broadcast_to(mean, inputs.shape)
 
         inv = scale * jax.lax.rsqrt(variance + 1e-5)
-        return inv * (inputs - mean) + offset
+        if self.offset:
+            return inv * (inputs - mean) + offset
+        else:
+            return inv * (inputs - mean)
+
+
+class RMSNorm(hk.Module):
+    def __init__(self, offset, elementwise):
+        super().__init__()
+        self.offset = offset
+        self.elementwise = elementwise
+
+    def __call__(self, x):
+        param_shape = (x.shape[-1],) if self.elementwise else ()
+        normed = x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-5)
+
+        scale = hk.get_parameter('scale', param_shape, init=hk.initializers.Constant(x.shape[-1] ** 0.5))
+        scale = jax.lax.pmean(scale, "shard")
+        normed = normed * scale
+
+        if self.offset:
+            offset = hk.get_parameter('offset', param_shape, init=jnp.zeros)
+            offset = jax.lax.pmean(offset, "shard")
+            normed = normed + offset
+
+        return normed
+
+
+def getnorm(type):
+    if type == "layernorm":
+        return ReplicatedLayerNorm()
+    elif type == "layernorm-nobias":
+        return ReplicatedLayerNorm(offset=False)
+    elif type == "rmsnorm":
+        return RMSNorm(False, True)
+    elif type == "scalenorm":
+        return RMSNorm(False, False)
+    elif type == "rmsnorm-bias":
+        return RMSNorm(True, True)
+    elif type == "scalenorm-bias":
+        return RMSNorm(True, False)
+    else:
+        raise Exception("Not implemented")
 
 
 class RelativePositionEmbs(hk.Module):
@@ -85,8 +131,12 @@ class RelativePositionEmbs(hk.Module):
 
 
 class EmbeddingShard(hk.Module):
-    def __init__(self, in_dim, out_dim, shards, name=None):
+    def __init__(self, config, name=None):
         super().__init__(name=name)
+        in_dim = config["n_vocab"]
+        out_dim = config["d_model"]
+        shards = config["cores_per_replica"]
+        
         assert in_dim % shards == 0
 
         self.in_dim = in_dim
@@ -114,8 +164,13 @@ class EmbeddingShard(hk.Module):
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
 class TransformerLayerShard(hk.Module):
-    def __init__(self, dim, heads, shards, init_scale=1., name=None):
+    def __init__(self, config, name=None, init_scale=1.):
         super().__init__(name=name)
+        heads = config["n_heads"]
+        dim = config["d_model"]
+        shards = config["cores_per_replica"]
+        norm = getnorm(config["norm"])
+
         assert dim % heads == 0
         assert heads % shards == 0
 
@@ -124,7 +179,7 @@ class TransformerLayerShard(hk.Module):
         self.heads_per_shard = heads // shards
         self.dim_per_shard = dim // shards
 
-        self.ln = ReplicatedLayerNorm()
+        self.norm = norm
 
         self.q = hk.Linear(self.dim_per_shard, with_bias=False)
         self.v = hk.Linear(self.dim_per_shard, with_bias=False)
@@ -138,7 +193,7 @@ class TransformerLayerShard(hk.Module):
                                       w_init=hk.initializers.TruncatedNormal(stddev=init_scale / np.sqrt(self.dim)))
 
     def __call__(self, x, attn_bias):
-        x = self.ln(x)
+        x = self.norm(x)
 
         q = self.q(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
         v = self.v(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
@@ -169,20 +224,24 @@ class TransformerLayerShard(hk.Module):
 
 
 class ProjectionShard(hk.Module):
-    def __init__(self, out_dim, shards, name=None):
+    def __init__(self, config, name=None):
         super().__init__(name=name)
+        out_dim = config["n_vocab"]
+        shards = config["cores_per_replica"]
+        norm = getnorm(config["norm"])
+
         assert out_dim % shards == 0
 
         self.dim = out_dim
         self.dim_per_shard = out_dim // shards
         self.shards = shards
 
-        self.ln = ReplicatedLayerNorm()
+        self.norm = norm
 
         self.proj = hk.Linear(self.dim_per_shard)
 
     def __call__(self, x):
-        x = self.ln(x)
+        x = self.norm(x)
         proj = self.proj(x)
 
         all_proj = jax.lax.all_gather(proj, 'shard')
@@ -190,6 +249,7 @@ class ProjectionShard(hk.Module):
         return hk.Flatten()(jnp.transpose(all_proj, (1, 0, 2)))
 
     def loss(self, x, targets, dtype=jnp.bfloat16, z_loss=False):
+        x = self.norm(x)
         shard_logits = self.proj(x).astype(jnp.float32)
 
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
@@ -210,23 +270,25 @@ class ProjectionShard(hk.Module):
 
 
 class CausalTransformerShard(hk.Module):
-    def __init__(self, dim, heads, layer_count, seq, vocab):
+    def __init__(self, config):
         super().__init__()
+        heads = config["n_heads"]
+        shards = config["cores_per_replica"]
+        layer_count = config["layers"]
+
         self.transformer_layers = []
         self.heads = heads
 
-        shards = thread_resources.env.shape['mp']
         self.heads_per_shard = heads // shards
 
-        self.embed = EmbeddingShard(vocab, dim, shards)
+        self.embed = EmbeddingShard(config)
 
         init_scale = 2. / layer_count
 
         for i in range(layer_count):
-            self.transformer_layers.append(
-                TransformerLayerShard(dim, heads, shards, init_scale=init_scale, name=f"layer_{i}"))
+            self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale))
 
-        self.proj = ProjectionShard(vocab, shards)
+        self.proj = ProjectionShard(config)
         self.rpe = RelativePositionEmbs()
 
     def eval(self, context, target, z_loss=False):
@@ -247,14 +309,13 @@ class CausalTransformerShard(hk.Module):
 
 
 class CausalTransformer:
-    def __init__(self, dim: int, heads: int, layer_count: int, vocab: int, seq: int,
-                 optimizer: optax.GradientTransformation,
-                 deterministic: bool = True):
-        self.heads = heads
+    def __init__(self, config):
+        self.config = config
+        optimizer = config["optimizer"]
 
         def eval(state, ctx, tgt):
             def eval_loss(x, y):
-                transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
+                transformer = CausalTransformerShard(config)
                 return transformer.loss(x, y)
 
             eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply
@@ -263,7 +324,7 @@ class CausalTransformer:
 
         def train(state, ctx, tgt):
             def train_loss(x, y):
-                transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
+                transformer = CausalTransformerShard(config)
                 return transformer.loss(x, y, z_loss=True)
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
@@ -291,7 +352,7 @@ class CausalTransformer:
 
         def init(key, x):
             def train_loss(x, y):
-                transformer = CausalTransformerShard(dim, heads, layer_count, seq, vocab)
+                transformer = CausalTransformerShard(config)
                 return transformer.loss(x, y)
 
             param_init_fn = hk.transform(train_loss).init
@@ -325,15 +386,12 @@ class CausalTransformer:
                                                      donate_argnums=(0,),
                                                      axis_resources={'shard': 'mp', 'batch': 'dp'})
 
-        if deterministic:
-            # key = hk.PRNGSequence(42 + jax.host_id())
-            key = hk.PRNGSequence(42)  # we actually need this to be completely deterministic until xmap is fixed
-        else:
-            # key = hk.PRNGSequence(random.randrange(1e9))
-            key = hk.PRNGSequence(42)
+        key = hk.PRNGSequence(42)
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
+        seq = config["seq"]
+        vocab = config["n_vocab"]
         x = jax.random.uniform(next(key), (dp // jax.host_count(), seq,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
 
         print("key shape", jnp.array(key.take(mp)).shape)
