@@ -1,3 +1,4 @@
+import functools
 import time
 
 import haiku as hk
@@ -16,6 +17,57 @@ def to_bf16(t):
     return jax.tree_map(lambda x: x.astype(jnp.bfloat16) if x.dtype == jnp.float32 else x, t)
 
 
+# identity in forward pass, psum in backward
+@jax.custom_vjp
+def f_psum(x):
+    return x
+
+
+def f_psum_fwd(x):
+    return f_psum(x), None
+
+
+def f_psum_bwd(_, g):
+    return jax.lax.psum(g, "shard"),
+
+
+f_psum.defvjp(f_psum_fwd, f_psum_bwd)
+
+
+# identity in forward pass, pmean in backward
+@jax.custom_vjp
+def f_pmean(x):
+    return x
+
+
+def f_pmean_fwd(x):
+    return f_psum(x), None
+
+
+def f_pmean_bwd(_, g):
+    return jax.lax.pmean(g, "shard"),
+
+
+f_pmean.defvjp(f_pmean_fwd, f_pmean_bwd)
+
+
+# psum in forward pass, identity in backward
+@jax.custom_vjp
+def g_psum(x):
+    return jax.lax.psum(x, "shard")
+
+
+def g_psum_fwd(x):
+    return g_psum(x), None
+
+
+def g_psum_bwd(_, g):
+    return g,
+
+
+g_psum.defvjp(g_psum_fwd, g_psum_bwd)
+
+
 class ReplicatedLayerNorm(hk.Module):
     def __init__(self, offset=True):
         super().__init__()
@@ -27,10 +79,10 @@ class ReplicatedLayerNorm(hk.Module):
 
         param_shape = inputs.shape[-1:]
         scale = hk.get_parameter("scale", param_shape, inputs.dtype, init=jnp.ones)
-        scale = jax.lax.pmean(scale, "shard")
+        scale = f_psum(scale)
 
         offset = hk.get_parameter("offset", param_shape, inputs.dtype, init=jnp.zeros)
-        offset = jax.lax.pmean(offset, "shard")
+        offset = f_psum(offset)
 
         scale = jnp.broadcast_to(scale, inputs.shape)
         offset = jnp.broadcast_to(offset, inputs.shape)
@@ -136,15 +188,12 @@ class EmbeddingShard(hk.Module):
         in_dim = config["n_vocab"]
         out_dim = config["d_model"]
         shards = config["cores_per_replica"]
-        
+
         assert in_dim % shards == 0
 
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.in_dim_per_shard = in_dim // shards
-        self.shards = shards
-
-        self.out_dim_per_shard = out_dim // shards
 
         # embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
         # self.positional_embeddings = hk.get_parameter('pos_embs', [seq_length, self.out_dim_per_shard], init=embed_init)
@@ -154,12 +203,12 @@ class EmbeddingShard(hk.Module):
         shard_start_index = jax.lax.axis_index('shard') * self.in_dim_per_shard
         shard_index = jnp.arange(0, self.in_dim_per_shard) + shard_start_index
 
-        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(jnp.float32)).astype(dtype)
+        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(jnp.float32))
 
         # all_pos_embed = jax.lax.all_gather(self.positional_embeddings, 'shard')
         # all_pos_embed = hk.Flatten()(jnp.transpose(all_pos_embed, (1, 0, 2)))
 
-        return jax.lax.psum(proj_out, "shard")  # + all_pos_embed
+        return g_psum(proj_out)  # + all_pos_embed
 
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
@@ -193,6 +242,7 @@ class TransformerLayerShard(hk.Module):
                                       w_init=hk.initializers.TruncatedNormal(stddev=init_scale / np.sqrt(self.dim)))
 
     def __call__(self, x, attn_bias):
+        x = f_psum(x)
         x = self.norm(x)
 
         q = self.q(x).reshape((-1, self.heads_per_shard, self.dim_per_head))
@@ -220,7 +270,7 @@ class TransformerLayerShard(hk.Module):
         dense_proj = jax.nn.gelu(dense_proj)
         dense_out = self.dense_proj_o(dense_proj)
 
-        return jax.lax.psum(attn_out + dense_out, "shard")
+        return g_psum(attn_out + dense_out)
 
 
 class ProjectionShard(hk.Module):
@@ -234,7 +284,6 @@ class ProjectionShard(hk.Module):
 
         self.dim = out_dim
         self.dim_per_shard = out_dim // shards
-        self.shards = shards
 
         self.norm = norm
 
@@ -248,25 +297,28 @@ class ProjectionShard(hk.Module):
 
         return hk.Flatten()(jnp.transpose(all_proj, (1, 0, 2)))
 
-    def loss(self, x, targets, dtype=jnp.bfloat16, z_loss=False):
+    def loss(self, x, targets, z_loss=False):
+        x = f_psum(x)
         x = self.norm(x)
-        shard_logits = self.proj(x).astype(jnp.float32)
+        logits = self.proj(x)
 
         shard_start_index = jax.lax.axis_index('shard') * self.dim_per_shard
-        shard_index = jnp.arange(0, self.dim_per_shard) + shard_start_index
+        global_max = jax.lax.pmax(jax.lax.stop_gradient(logits.max(-1, keepdims=True)), "shard")
+        logits -= jax.lax.stop_gradient(global_max)
 
-        gt_onehot = (shard_index.reshape(1, -1) == targets.reshape(-1, 1)).astype(jnp.float32)
+        gt_onehot = jax.nn.one_hot(targets - shard_start_index, self.dim_per_shard)
+        predicted_logits = jnp.sum(jnp.multiply(gt_onehot, logits), axis=-1)
+        predicted_logits = g_psum(predicted_logits)
 
-        shifted = shard_logits - jax.lax.stop_gradient(
-            jax.lax.pmax(jax.lax.stop_gradient(shard_logits.max(-1, keepdims=True)), "shard"))
-        logsoftmax = shifted - jnp.log(jax.lax.psum(jnp.sum(jnp.exp(shifted), -1, keepdims=True), "shard"))
+        exp_logits = jnp.exp(logits)
 
-        loss = jax.lax.psum(-jnp.sum(gt_onehot * logsoftmax, axis=-1), "shard")
+        sum_exp_logits = exp_logits.sum(axis=-1)
+        sum_exp_logits = g_psum(sum_exp_logits)
 
-        if z_loss:
-            loss += 1e-4 * jnp.square(logsoftmax)
+        # if z_loss:
+        #     loss += 1e-4 * jnp.square(logsoftmax)
 
-        return loss
+        return jnp.log(sum_exp_logits) - predicted_logits
 
 
 class CausalTransformerShard(hk.Module):
@@ -388,11 +440,15 @@ class CausalTransformer:
 
         key = hk.PRNGSequence(42)
 
+        assert thread_resources.env.shape['mp'] == config["cores_per_replica"]
+
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
         seq = config["seq"]
         vocab = config["n_vocab"]
-        x = jax.random.uniform(next(key), (dp // jax.host_count(), seq,), minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
+
+        example_shape = (dp // jax.host_count(), seq,)
+        x = jax.random.uniform(next(key), example_shape, minval=0, maxval=vocab).astype(jnp.int32)  # batch, len
 
         print("key shape", jnp.array(key.take(mp)).shape)
         print("in shape", x.shape)

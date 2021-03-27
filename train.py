@@ -13,6 +13,7 @@ from tqdm import tqdm
 from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
 from mesh_transformer.transformer_shard import CausalTransformer
+from mesh_transformer.util import clip_by_global_norm
 from ray_tpu import start_ray, get_connection, create_tpu, wait_til
 from tfrecord_loader import TFRecordNewInputs
 
@@ -90,7 +91,7 @@ if __name__ == "__main__":
 
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
-        optax.clip_by_global_norm(1),
+        clip_by_global_norm(1),
         optax.scale_by_adam(),
         optax.additive_weight_decay(weight_decay),
         optax.scale(-1),

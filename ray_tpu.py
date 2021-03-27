@@ -121,23 +121,22 @@ def start_ray(conn, address):
     conn.sudo('rm -rf mesh_transformer')
 
     for i in glob.glob("*.py"):
-        print(i)
         conn.put(i, "")
 
     conn.run("mkdir mesh_transformer -p")
 
     for i in glob.glob("mesh_transformer/*.py"):
-        print(i)
         conn.put(i, "mesh_transformer/")
 
     conn.sudo('python3 setup.py install')
 
     conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
     conn.put("scripts/jax_pod_setup.py", "/tmp/jax_pod_setup.py")
-    print(conn.sudo('chmod +x /tmp/ray-tpu.sh'))
-    print(conn.sudo('/tmp/ray-tpu.sh'))
+    conn.sudo('chmod +x /tmp/ray-tpu.sh')
+    conn.sudo('/tmp/ray-tpu.sh')
     try:
         print(conn.run('ray stop -f'))
     except:
         pass
-    print(conn.run(f"python3 /tmp/jax_pod_setup.py {address}"))
+
+    print(conn.run(f"ray start --address={address} --resources='" + '{"tpu": 1}\''))
