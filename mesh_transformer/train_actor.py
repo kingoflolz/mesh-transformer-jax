@@ -51,8 +51,14 @@ class NetworkRunner(object):
                 elif operation == "load_ckpt":
                     network.state = read_ckpt(network.state, input, devices.shape[1])
                     self.output_q.put(network.state["step"][0])
+                elif operation == "noop":
+                    self.output_q.put(None)
                 else:
                     raise Exception("Not implemented")
+
+    def noop(self):
+        self.input_q.put(("noop", None))
+        return self.output_q.get()
 
     def train(self, sample):
         self.input_q.put(("train", sample))

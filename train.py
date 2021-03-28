@@ -127,7 +127,7 @@ if __name__ == "__main__":
 
     start = time.time()
     t.train(train_dataset.get_samples())
-    print(f"Train fn in {time.time() - start:.06}s")
+    print(f"Train fn compiled in {time.time() - start:.06}s")
 
     start = time.time()
     t.eval(val_dataset.get_samples())
@@ -137,8 +137,8 @@ if __name__ == "__main__":
     wandb.init(project='mesh-transformer-jax', entity="eleutherai", name=params["name"], config=params)
 
     while True:
-        loss = t.train(train_dataset.get_samples())
-        wandb.log({'train/loss': loss}, step)
+        loss, last_loss = t.train(train_dataset.get_samples())
+        wandb.log({'train/loss': loss, 'train/last_loss': last_loss}, step)
 
         if step % ckpt_every == 0 and step:
             t.save(step, bucket, model_dir, aux={"train_loader": train_dataset.get_state()}, init=False)

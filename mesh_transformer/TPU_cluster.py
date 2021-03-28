@@ -22,11 +22,20 @@ class TPUCluster:
         self.node_count = node_count
         self.dp, self.mp = mesh_shape
 
+        start = time.time()
+
         for i in range(node_count):
             self.nodes.append(NetworkRunner.options(max_concurrency=2).remote(mesh_shape, model))
 
         for n in self.nodes:
             n.run.remote()
+
+        noops = []
+        for n in self.nodes:
+            noops.append(n.noop.remote())
+
+        ray.get(noops)
+        print(f"Ray actors created in {time.time() - start:.06}s")
 
     def train(self, data):
         data_chunks = np.array_split(data, len(self.nodes), axis=1)
@@ -38,7 +47,16 @@ class TPUCluster:
                 "target": d[:, :, 1:],
             }))
 
-        return np.array(ray.get(res)).mean()
+        res = ray.get(res)
+
+        loss = []
+        last_loss = []
+
+        for r in res:
+            loss.append(r[0])
+            last_loss.append(r[1])
+
+        return np.array(loss).mean(), np.array(last_loss).mean()
 
     def eval(self, data):
         data_chunks = np.array_split(data, len(self.nodes), axis=0)
