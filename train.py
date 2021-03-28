@@ -118,12 +118,12 @@ if __name__ == "__main__":
     train_dataset = TFRecordNewInputs(f"data/{params['train_set']}",
                                       batch_size=(
                                       gradient_accumulation_steps, per_replica_batch * tpu_size // cores_per_replica),
-                                      sample_size=1024,
+                                      sample_size=params['seq'],
                                       restore_state=train_load_restore)
 
     val_dataset = TFRecordNewInputs(f"data/{params['val_set']}",
                                     batch_size=(per_replica_batch * tpu_size // cores_per_replica,),
-                                    sample_size=1024)
+                                    sample_size=params['seq'])
 
     start = time.time()
     t.train(train_dataset.get_samples())

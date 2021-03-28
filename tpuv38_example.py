@@ -1,49 +1,82 @@
-import os
 import time
-import jax
+
+import haiku as hk
 import numpy as np
 import optax
-import haiku as hk
-
 
 from enwik8_loader import TextLoader
-from mesh_transformer import checkpoint
 from mesh_transformer.transformer_shard import CausalTransformer
 
 bs = 8
 seq = 1024
 it = 1000
 
+# batch = (gas, batch)
 loader = TextLoader("data/enwik8", (1, bs), seq)
 
-devices = np.array(jax.devices()).reshape((8, 1))
-
 import jax.profiler
+
 server = jax.profiler.start_server(9999)
 hk.experimental.profiler_name_scopes()
 
+opt = optax.chain(
+    optax.clip_by_global_norm(1),
+    optax.scale_by_adam(eps=1e-4),
+    optax.scale(-1e-4),
+)
+
+start = time.time()
+
+# 100M
+base = {
+    "layers": 8,
+    "d_model": 512,
+    "n_heads": 4,
+    "cores_per_replica": 4
+}
+
+# 300M
+large = {
+    "layers": 16,
+    "d_model": 1024,
+    "n_heads": 8,
+    "cores_per_replica": 8
+}
+
+# 2.7B
+gpt_2b7 = {
+    "layers": 16,
+    "d_model": 3072,
+    "n_heads": 12,
+    "cores_per_replica": 8
+}
+
+# 4.8B
+gpt_4b8 = {
+    "layers": 24,
+    "d_model": 4096,
+    "n_heads": 32,
+    "cores_per_replica": 8
+}
+
+# 10B
+gpt_10b = {
+    "layers": 32,
+    "d_model": 5120,
+    "n_heads": 40,
+    "cores_per_replica": 8
+}
+
+config = base
+config["n_vocab"] = 256
+config["norm"] = "layernorm"
+config["seq"] = 1024
+config["optimizer"] = opt
+
+devices = np.array(jax.devices()).reshape((-1, config["cores_per_replica"]))
+
 with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
-    opt = optax.chain(
-        optax.clip_by_global_norm(1),
-        optax.scale_by_adam(eps=1e-4),
-        optax.scale(-1e-4),
-    )
-
-    start = time.time()
-
-    # c = CausalTransformer(dim=1024, heads=8, layer_count=20, vocab=50400, seq=1024, optimizer=opt)
-
-    # 2.7B
-    # c = CausalTransformer(dim=3072, heads=8, layer_count=12, vocab=256, optimizer=opt)
-    
-    # 4.8B
-    # c = CausalTransformer(dim=4096, heads=32, layer_count=24, vocab=256, optimizer=opt)
-    
-    # 10B
-    # c = CausalTransformer(dim=5120, heads=40, layer_count=32, vocab=256, optimizer=opt)
-
-    # 8B-big-vocab
-    c = CausalTransformer(dim=5120, heads=40, layer_count=24, vocab=50400, seq=1024, optimizer=opt)
+    c = CausalTransformer(config)
 
     param_count = hk.data_structures.tree_size(c.state['params'])
 
@@ -52,7 +85,10 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
 
     start = time.time()
     sample = loader.get_samples()
-    loss = c.train(sample)
+    loss = c.train({
+                "obs": sample[:, :, :-1],
+                "target": sample[:, :, 1:],
+            })
     print(f"Compiled in {time.time() - start:.06}s")
 
     start = time.time()
@@ -60,16 +96,16 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
         with jax.profiler.StepTraceContext("train", step_num=i):
             sample = loader.get_samples()
             loss = c.train({
-                "obs": sample[:, :-1],
-                "target": sample[:, 1:],
+                "obs": sample[:, :, :-1],
+                "target": sample[:, :, 1:],
             })
             if i % 10 == 0:
-                print(f"it: {i}, loss: {loss.mean()}")
+                print(f"it: {i}, loss: {np.array(loss).mean()}")
     total_time = time.time() - start
     print(f"{it} steps in {total_time:.06}s")
 
     weight_flops = bs * seq * it * param_count
-    attn_flops = bs * (seq**2) * it * 32 * 5120 * 16
+    attn_flops = bs * (seq ** 2) * it * 32 * 5120 * 16
     print(f"effective flops (not including attn): {weight_flops * 6 / total_time:.06}")
     print(f"MXU flops: {(weight_flops * 8 + attn_flops) / total_time:.06}")
     jax.profiler.save_device_memory_profile("memory.pprof")
