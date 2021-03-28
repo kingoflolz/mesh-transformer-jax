@@ -232,8 +232,8 @@ class TransformerLayerShard(hk.Module):
         q, v, k = self.qvk_proj(x)
 
         # add new kv to end
-        k = jnp.concatenate((decode_state["k"][1:], k.reshape((1, -1))), axis=0)[1:]
-        v = jnp.concatenate((decode_state["v"][1:], v.reshape((1, -1))), axis=0)[1:]
+        k = jnp.concatenate((decode_state["k"], k), axis=0)[1:]
+        v = jnp.concatenate((decode_state["v"], v), axis=0)[1:]
 
         decode_state["tokens_decoded"] += 1
         decode_state["k"] = k
