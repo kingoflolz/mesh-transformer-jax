@@ -29,7 +29,7 @@ class TFRecordNewInputs:
             return tf.sparse.to_dense(tf.sparse.reorder(parsed_features["text"])), parsed_features["text"].dense_shape[0]
 
         for i in self.clean_index:
-            file = tf.data.TFRecordDataset(i).map(tf_parse).batch(np.prod(self.bs), drop_remainder=True)
+            file = tf.data.TFRecordDataset(i).map(tf_parse, num_parallel_calls=tf.data.AUTOTUNE).batch(np.prod(self.bs), drop_remainder=True).prefetch(10)
             for file_idx, (data, size) in enumerate(file):
                 data = np.array(data)
                 assert data.shape[-1] == self.seq + 1
@@ -60,9 +60,9 @@ class TFRecordNewInputs:
 
 
 if __name__ == "__main__":
-    d = TFRecordNewInputs("data/openwebtext2_new_inputs.val.index", (8, 32), 1024)
+    d = TFRecordNewInputs("data/pile.val.index", (8, 32), 2048)
     for idx, i in enumerate(d.sample_once()):
-        if idx % 1000 == 0:
-            print(idx)
+        print(i.shape)
+        break
 
     print()
