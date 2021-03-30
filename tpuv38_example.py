@@ -10,7 +10,7 @@ from mesh_transformer.transformer_shard import CausalTransformer
 
 bs = 8
 seq = 1024
-it = 100000
+it = 10000
 
 # batch = (gas, batch)
 loader = TextLoader("data/enwik8", (1, bs), seq)
@@ -36,7 +36,7 @@ tiny = {
     "cores_per_replica": 4
 }
 
-# 100M
+# 25M
 base = {
     "layers": 8,
     "d_model": 512,
@@ -44,7 +44,7 @@ base = {
     "cores_per_replica": 4
 }
 
-# 300M
+# 200M
 large = {
     "layers": 16,
     "d_model": 1024,
@@ -76,7 +76,7 @@ gpt_10b = {
     "cores_per_replica": 8
 }
 
-config = large
+config = base
 config["n_vocab"] = 256
 config["norm"] = "layernorm"
 config["seq"] = 1024
@@ -120,7 +120,7 @@ with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
                 output = output[:, :, 0]
                 for sample in output[:1]:
                     print(f"ctx: {repr(list_to_str(input_sample[0, 0, -100:].tolist()))}")
-                    print(repr(list_to_str(sample.tolist())))
+                    print(f"gen: {repr(list_to_str(sample.tolist()))}")
 
     total_time = time.time() - start
     print(f"{it} steps in {total_time:.06}s")

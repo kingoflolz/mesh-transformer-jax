@@ -1,4 +1,5 @@
 import random
+import time
 
 import haiku as hk
 import jax
@@ -33,10 +34,11 @@ class CausalTransformerShard(hk.Module):
         self.proj = ProjectionShard(config)
         self.rpe = RelativePositionEmbs()
 
-    def eval(self, context, target, z_loss=0.):
+    def eval(self, context, target, z_loss=0., mask=0.0):
         input_len = context.shape[0]
 
         attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        attn_bias += mask
 
         x = hk.remat(self.embed)(context)
 
@@ -45,10 +47,14 @@ class CausalTransformerShard(hk.Module):
 
         return hk.remat(self.proj.loss)(x, target, z_loss)
 
-    def loss(self, ctx, tgt, z_loss=False):
-        loss = self.eval(ctx, tgt, float(z_loss))
+    def loss(self, ctx, tgt, z_loss=False, mask=0.0):
+        loss, correct = self.eval(ctx, tgt, float(z_loss), mask=mask)
 
-        return loss.mean(), loss[-1].mean()  # return lass token loss as well to check for cheating
+        return {
+            "loss": loss.mean(),
+            "last_loss": loss[-1].mean(),
+            "correct": correct
+        }
 
     def generate_initial(self, context, length):
         # slice last token off the context (we use that in generate_once to generate the first new token)
@@ -92,19 +98,23 @@ class CausalTransformer:
         self.config = config
         optimizer = config["optimizer"]
 
-        def eval(state, ctx, tgt):
-            def eval_loss(x, y):
+        def eval(state, ctx, tgt, ctx_length):
+            def eval_loss(x, y, mask):
                 transformer = CausalTransformerShard(config)
-                return transformer.loss(x, y)
+                return transformer.loss(x, y, mask=mask)
 
             eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply
 
-            return eval_loss_fn(to_bf16(state["params"]), ctx, tgt)
+            mask = (jnp.arange(0, len(ctx)) < (len(ctx) - ctx_length - 1)) * -1e10
+
+            return eval_loss_fn(to_bf16(state["params"]), ctx, tgt, mask)
 
         def train(state, ctx, tgt):
             def train_loss(x, y):
                 transformer = CausalTransformerShard(config)
-                return transformer.loss(x, y, z_loss=True)
+                out = transformer.loss(x, y, z_loss=True)
+
+                return out["loss"], out
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
@@ -112,15 +122,19 @@ class CausalTransformer:
                 ctx, tgt = batch
 
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
-                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
+                (loss, aux_stuff), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
 
                 new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
-                return new_grad, (loss, last_loss)
+                return new_grad, (loss, aux_stuff)
 
-            grad, (loss, last_loss) = jax.lax.scan(microbatch,
-                                                   jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
-                                                                state["params"]),
-                                                   (ctx, tgt))
+            if ctx.shape[0] == 1:
+                val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
+                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx[0], tgt[0])
+            else:
+                grad, (loss, last_loss) = jax.lax.scan(microbatch,
+                                                       jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
+                                                                    state["params"]),
+                                                       (ctx, tgt))
 
             grad = jax.lax.pmean(grad, "batch")
             updates, new_opt_state = optimizer.update(grad, state["opt_state"], state["params"])
@@ -136,7 +150,7 @@ class CausalTransformer:
                 transformer = CausalTransformerShard(config)
                 return transformer.loss(x, y)
 
-            param_init_fn = hk.transform(train_loss).init
+            param_init_fn = hk.transform(hk.experimental.optimize_rng_use(train_loss)).init
 
             params = param_init_fn(key, x, x)
 
@@ -158,6 +172,7 @@ class CausalTransformer:
                     next_token, state = carry
                     output, new_state = transformer.generate_once(next_token, state)
                     next_token, sample_info = sampler(output, sampler_input)
+
                     output = (next_token, sample_info)
                     new_carry = (next_token, new_state)
                     return new_carry, output
@@ -176,6 +191,7 @@ class CausalTransformer:
 
         self.eval_xmap = jax.experimental.maps.xmap(fun=eval,
                                                     in_axes=(["shard", ...],
+                                                             ["batch", ...],
                                                              ["batch", ...],
                                                              ["batch", ...]),
                                                     out_axes=["batch", ...],
@@ -198,26 +214,34 @@ class CausalTransformer:
                                                         out_axes=["batch", ...],
                                                         axis_resources={'shard': 'mp', 'batch': 'dp'})
 
+        self.move_xmap = jax.experimental.maps.xmap(fun=lambda x, _: x,
+                                                    in_axes=(["shard", ...], ["batch", ...]),
+                                                    out_axes=["shard", ...],
+                                                    axis_resources={'shard': 'mp', 'batch': 'dp'})
+
         key = hk.PRNGSequence(42)
 
         assert thread_resources.env.shape['mp'] == config["cores_per_replica"]
 
         dp = thread_resources.env.shape['dp']
         mp = thread_resources.env.shape['mp']
+
+        mp_per_host = min(mp, 8)
+
         seq = config["seq"]
         vocab = config["n_vocab"]
 
-        example_shape = (dp // jax.host_count(), seq,)
+        example_shape = (max(dp // jax.host_count(), 1), seq,)
         x = jax.random.uniform(next(key), example_shape, minval=0, maxval=vocab).astype(jnp.uint32)  # batch, len
 
-        print("key shape", jnp.array(key.take(mp)).shape)
+        print("key shape", jnp.array(key.take(mp_per_host)).shape)
         print("in shape", x.shape)
 
         print("dp", dp)
         print("mp", mp)
 
         self.gen_length = 1
-        self.state = self.init_xmap(jnp.array(key.take(mp)), x)
+        self.state = self.init_xmap(jnp.array(key.take(mp_per_host)), x)
 
     def train(self, sample):
         # print("train iter")
@@ -243,10 +267,18 @@ class CausalTransformer:
         # print("eval target", sample["target"].shape)
 
         # start = time.time()
-        loss = self.eval_xmap(self.state, sample["obs"], sample["target"])
-        loss = np.array(loss)
+
+        if "ctx_length" in sample:
+            ctx_length = sample["ctx_length"]
+        else:
+            ctx_length = np.array([len(sample["obs"][0])] * len(sample["obs"]))
+
+        out = self.eval_xmap(self.state, sample["obs"], sample["target"], ctx_length)
+        # print(f"eval dispatched in {time.time() - start:.06}s")
+
+        # np.array(out["loss"])
         # print(f"eval done in {time.time() - start:.06}s")
-        return loss.mean()
+        return out
 
     def generate(self, ctx, ctx_length, gen_length):
         key = hk.PRNGSequence(random.randint(0, 2 ** 60))
@@ -258,5 +290,5 @@ class CausalTransformer:
         return self.generate_xmap(self.state,
                                   jnp.array(key.take(batch_size)),
                                   ctx,
-                                  ctx_length,
+                                  np.array(ctx_length, dtype=np.int32),
                                   aux)

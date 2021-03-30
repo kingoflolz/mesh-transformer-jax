@@ -30,11 +30,11 @@ class TPUCluster:
         for n in self.nodes:
             n.run.remote()
 
-        noops = []
+        params = []
         for n in self.nodes:
-            noops.append(n.noop.remote())
+            params.append(n.get_params.remote())
 
-        ray.get(noops)
+        self.param_count = ray.get(params)[0]
         print(f"Ray actors created in {time.time() - start:.06}s")
 
     def train(self, data):
@@ -59,16 +59,58 @@ class TPUCluster:
         return np.array(loss).mean(), np.array(last_loss).mean()
 
     def eval(self, data):
-        data_chunks = np.array_split(data, len(self.nodes), axis=0)
+        if isinstance(data, dict):
+            data_chunked = [{} for _ in self.nodes]
+            for k, v in data.items():
+                v_chunks = np.array_split(v, len(self.nodes), axis=0)
+                for idx, v_chunk in enumerate(v_chunks):
+                    data_chunked[idx][k] = v_chunk
 
-        res = []
-        for n, d in zip(self.nodes, data_chunks):
-            res.append(n.eval.remote({
-                "obs": d[:, :-1],
-                "target": d[:, 1:],
-            }))
+            res = []
+            for n, d in zip(self.nodes, data_chunked):
+                res.append(n.eval.remote(d))
 
-        return np.array(ray.get(res)).mean()
+            total = 0
+            correct = 0
+
+            for input, output in zip(data_chunked, ray.get(res)):
+
+                # print('output["correct"]', output["correct"])
+                # print('output["correct"].sum()', output["correct"].sum())
+
+                correct_and_valid = np.logical_and(output["correct"], input["eval_mask"])
+                # print('correct_and_valid', correct_and_valid.shape)
+
+                correct_tokens_count = np.sum(correct_and_valid, -1)
+                # print('correct_tokens_count', correct_tokens_count)
+
+                valid_tokens_count = np.sum(input["eval_mask"], -1)
+                # print('valid_tokens_count', valid_tokens_count)
+
+                correct_example = np.logical_and(valid_tokens_count == correct_tokens_count, valid_tokens_count > 0)
+                # print('correct_example', correct_example)
+
+                valid_example = valid_tokens_count > 0
+                # print('valid_example', valid_example)
+
+                total += sum(valid_example)
+                correct += sum(correct_example)
+
+            return {
+                "total": total,
+                "correct": correct
+            }
+        else:
+            data_chunks = np.array_split(data, len(self.nodes), axis=0)
+
+            res = []
+            for n, d in zip(self.nodes, data_chunks):
+                res.append(n.eval.remote({
+                    "obs": d[:, :-1],
+                    "target": d[:, 1:],
+                }))
+
+            return np.array(ray.get(res)).mean()
 
     def load(self, bucket, path):
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:

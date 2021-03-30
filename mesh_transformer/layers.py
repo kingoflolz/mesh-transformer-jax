@@ -141,9 +141,9 @@ class EmbeddingShard(hk.Module):
 
     def __call__(self, x, dtype=jnp.bfloat16):
         shard_start_index = jax.lax.axis_index('shard') * self.in_dim_per_shard
-        shard_index = jnp.arange(0, self.in_dim_per_shard) + shard_start_index
 
-        proj_out = self.proj((shard_index.reshape(1, -1) == x.reshape(-1, 1)).astype(jnp.float32))
+        input_onehot = jax.nn.one_hot(x - shard_start_index, self.in_dim_per_shard)
+        proj_out = self.proj(input_onehot)
 
         # all_pos_embed = jax.lax.all_gather(self.positional_embeddings, 'shard')
         # all_pos_embed = hk.Flatten()(jnp.transpose(all_pos_embed, (1, 0, 2)))
@@ -245,7 +245,7 @@ class TransformerLayerShard(hk.Module):
         masked_tokens = length - tokens_decoded
 
         attention_mask = jnp.arange(0, length) < masked_tokens
-        bias = (-1e10 * attention_mask)
+        bias = 0  # (-1e10 * attention_mask)
         bias += attn_bias
 
         attn_out = self.self_attn(q, v, k, bias)
@@ -266,8 +266,8 @@ class TransformerLayerShard(hk.Module):
         seq_len = x.shape[0]
         causal_mask = np.tril(np.ones((seq_len, seq_len)))
 
-        bias = -1e10 * (1. - causal_mask) + attn_bias  # regular AR masking
-        bias -= (1e10 * jnp.arange(0, full_length) < masked_tokens)  # mask out zero tokens before context starts
+        bias = -1e10 * (1. - causal_mask)  # regular AR masking
+        # bias -= 1e10 * (jnp.arange(0, full_length) < masked_tokens)  # mask out zero tokens before context starts
         bias += attn_bias  # finally add attn bias for rpe
 
         attn_out = self.self_attn(q, v, k, bias)
@@ -322,4 +322,6 @@ class ProjectionShard(hk.Module):
 
         loss += (1e-4 * jnp.square(jnp.log(sum_exp_logits)) * z_loss).mean()
 
-        return loss
+        correct = (0.0 == predicted_logits)
+
+        return loss, correct

@@ -132,10 +132,10 @@ def start_ray(conn, address):
 
     conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
     conn.put("scripts/jax_pod_setup.py", "/tmp/jax_pod_setup.py")
-    conn.sudo('chmod +x /tmp/ray-tpu.sh')
-    conn.sudo('/tmp/ray-tpu.sh')
+    conn.sudo('chmod +x /tmp/ray-tpu.sh', hide=True)
+    conn.sudo('/tmp/ray-tpu.sh', hide=True)
     try:
-        print(conn.run('ray stop -f'))
+        conn.run('ray stop -f', hide=True)
     except:
         pass
 

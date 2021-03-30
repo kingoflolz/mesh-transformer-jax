@@ -10,11 +10,7 @@ import ray
 import wandb
 from tqdm import tqdm
 
-from mesh_transformer import util
-from mesh_transformer.TPU_cluster import TPUCluster
-from mesh_transformer.transformer_shard import CausalTransformer
-from mesh_transformer.util import clip_by_global_norm
-from ray_tpu import start_ray, get_connection, create_tpu, wait_til
+from mesh_transformer.build_model import build_model
 from tfrecord_loader import TFRecordNewInputs
 
 
@@ -46,15 +42,15 @@ if __name__ == "__main__":
     tpu_name = args.tpu
     region = args.tpu_region
     preemptible = args.preemptible
-
-    bucket = params["bucket"]
-    model_dir = params["model_dir"]
+    clean_start = args.new
 
     gradient_accumulation_steps = params.get("gradient_accumulation_steps", 1)
     per_replica_batch = params["per_replica_batch"]
-    cores_per_replica = params["cores_per_replica"]
     tpu_size = params["tpu_size"]
+    cores_per_replica = params["cores_per_replica"]
 
+    bucket = params["bucket"]
+    model_dir = params["model_dir"]
     layers = params["layers"]
     d_model = params["d_model"]
     n_heads = params["n_heads"]
@@ -66,43 +62,8 @@ if __name__ == "__main__":
     val_every = params["val_every"]
     ckpt_every = params["ckpt_every"]
 
-    warmup_steps = params["warmup_steps"]
-    anneal_steps = params["anneal_steps"]
-    lr = params["lr"]
-    end_lr = params["end_lr"]
-    weight_decay = params["weight_decay"]
+    t = build_model(params, tpu_name, region, preemptible)
 
-    clean_start = args.new
-
-    assert tpu_size in [8, 32, 128, 256, 512]
-
-    create_tpu(tpu_name, region, f"v3-{tpu_size}", preemptible)
-    assert wait_til(tpu_name, region, {'state': 'READY', 'health': 'HEALTHY'})
-
-    conns = get_connection(tpu_name, region)
-
-    assert len(conns) * 8 == tpu_size, "wrong size TPU for config"
-
-    head_info = ray.init(dashboard_host="0.0.0.0")
-    address = head_info['redis_address']
-
-    with multiprocessing.Pool(processes=len(conns)) as p:
-        p.map(functools.partial(start_ray, address=address), conns)
-
-    opt = optax.chain(
-        optax.scale(1 / gradient_accumulation_steps),
-        clip_by_global_norm(1),
-        optax.scale_by_adam(),
-        optax.additive_weight_decay(weight_decay),
-        optax.scale(-1),
-        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))
-    )
-
-    params["optimizer"] = opt
-
-    model_fn = functools.partial(CausalTransformer, params)
-
-    t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn)
     try:
         t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
         step = 0

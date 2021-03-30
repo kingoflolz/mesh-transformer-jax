@@ -50,14 +50,19 @@ class NetworkRunner(object):
                     self.output_q.put(None)
                 elif operation == "load_ckpt":
                     network.state = read_ckpt(network.state, input, devices.shape[1])
+                    local_shards = max(jax.local_device_count() // self.mesh_shape[1], 1)
+
+                    del network.state["opt_state"]
+
+                    network.state = network.move_xmap(network.state, np.zeros(local_shards))
                     self.output_q.put(network.state["step"][0])
-                elif operation == "noop":
-                    self.output_q.put(None)
+                elif operation == "get_params":
+                    self.output_q.put(hk.data_structures.tree_size(network.state['params']))
                 else:
                     raise Exception("Not implemented")
 
-    def noop(self):
-        self.input_q.put(("noop", None))
+    def get_params(self):
+        self.input_q.put(("get_params", None))
         return self.output_q.get()
 
     def train(self, sample):
