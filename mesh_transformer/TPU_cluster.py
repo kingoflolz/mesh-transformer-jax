@@ -72,33 +72,35 @@ class TPUCluster:
 
             total = 0
             correct = 0
+            last_correct = 0
+
+            total_last_loss = 0
+            mask_loss = []
 
             for input, output in zip(data_chunked, ray.get(res)):
-
-                # print('output["correct"]', output["correct"])
-                # print('output["correct"].sum()', output["correct"].sum())
-
                 correct_and_valid = np.logical_and(output["correct"], input["eval_mask"])
-                # print('correct_and_valid', correct_and_valid.shape)
 
                 correct_tokens_count = np.sum(correct_and_valid, -1)
-                # print('correct_tokens_count', correct_tokens_count)
-
                 valid_tokens_count = np.sum(input["eval_mask"], -1)
-                # print('valid_tokens_count', valid_tokens_count)
 
                 correct_example = np.logical_and(valid_tokens_count == correct_tokens_count, valid_tokens_count > 0)
-                # print('correct_example', correct_example)
-
                 valid_example = valid_tokens_count > 0
-                # print('valid_example', valid_example)
+                last_correct_example = correct_and_valid[:, -1]
 
                 total += sum(valid_example)
                 correct += sum(correct_example)
+                last_correct += sum(last_correct_example)
+                total_last_loss += sum(valid_example * output["last_loss"])
+
+                valid_loss = np.sum(output["all_loss"] * input["eval_mask"], -1)
+                mask_loss += valid_loss.tolist()
 
             return {
                 "total": total,
-                "correct": correct
+                "correct": correct,
+                "last_correct": last_correct,
+                "last_loss": total_last_loss,
+                "mask_loss": np.array(mask_loss)
             }
         else:
             data_chunks = np.array_split(data, len(self.nodes), axis=0)
@@ -110,7 +112,17 @@ class TPUCluster:
                     "target": d[:, 1:],
                 }))
 
-            return np.array(ray.get(res)).mean()
+            return np.array([i["loss"] for i in ray.get(res)]).mean()
+
+    def move(self):
+        # do replicated checkpoint reading
+        start = time.time()
+        res = []
+        for node in self.nodes:
+            res.append(node.move_params.remote())
+        ray.get(res)
+
+        print(f"Moved weights to TPU in {time.time() - start:.06}s")
 
     def load(self, bucket, path):
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:

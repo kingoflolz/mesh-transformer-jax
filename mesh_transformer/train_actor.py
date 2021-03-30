@@ -50,14 +50,18 @@ class NetworkRunner(object):
                     self.output_q.put(None)
                 elif operation == "load_ckpt":
                     network.state = read_ckpt(network.state, input, devices.shape[1])
-                    local_shards = max(jax.local_device_count() // self.mesh_shape[1], 1)
-
-                    del network.state["opt_state"]
-
-                    network.state = network.move_xmap(network.state, np.zeros(local_shards))
                     self.output_q.put(network.state["step"][0])
                 elif operation == "get_params":
                     self.output_q.put(hk.data_structures.tree_size(network.state['params']))
+                elif operation == "move_params":
+                    # only needed for inference, otherwise first train step does this
+                    local_shards = max(jax.local_device_count() // self.mesh_shape[1], 1)
+
+                    # delete the optimizer states otherwise it OOMs for some reason
+                    # TODO: use ShardedDeviceArray or something to get around this for bigger models
+                    del network.state["opt_state"]
+                    network.state = network.move_xmap(network.state, np.zeros(local_shards))
+                    self.output_q.put(None)
                 else:
                     raise Exception("Not implemented")
 
@@ -79,4 +83,8 @@ class NetworkRunner(object):
 
     def load_ckpt(self, path):
         self.input_q.put(("load_ckpt", path))
+        return self.output_q.get()
+
+    def move_params(self):
+        self.input_q.put(("move_params", None))
         return self.output_q.get()

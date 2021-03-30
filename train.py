@@ -11,6 +11,7 @@ import wandb
 from tqdm import tqdm
 
 from mesh_transformer.build_model import build_model
+from tasks import LambadaTask, WinograndeTask
 from tfrecord_loader import TFRecordNewInputs
 
 
@@ -82,9 +83,14 @@ if __name__ == "__main__":
                                       sample_size=params['seq'],
                                       restore_state=train_load_restore)
 
+    global_val_batch = per_replica_batch * tpu_size // cores_per_replica
+
     val_dataset = TFRecordNewInputs(f"data/{params['val_set']}",
-                                    batch_size=(per_replica_batch * tpu_size // cores_per_replica,),
+                                    batch_size=(global_val_batch,),
                                     sample_size=params['seq'])
+
+    lambada = LambadaTask(seq)
+    winogrande = WinograndeTask(seq)
 
     start = time.time()
     t.train(train_dataset.get_samples())
@@ -94,7 +100,6 @@ if __name__ == "__main__":
     t.eval(val_dataset.get_samples())
     print(f"Eval fn compiled in {time.time() - start:.06}s")
 
-    # writer = SummaryWriter(flush_secs=5)
     wandb.init(project='mesh-transformer-jax', entity="eleutherai", name=params["name"], config=params)
 
     while True:
@@ -114,6 +119,14 @@ if __name__ == "__main__":
             print(f"validation loss for step {step}: {val_loss}")
 
             wandb.log({'val/loss': val_loss}, step)
+
+            lambada_results = lambada.run(global_val_batch, t)
+            wandb.log(lambada_results, step)
+            print(lambada_results)
+
+            winogrande_results = winogrande.run(global_val_batch, t)
+            wandb.log(winogrande_results, step)
+            print(winogrande_results)
 
         step += 1
 

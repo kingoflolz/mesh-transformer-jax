@@ -1,20 +1,16 @@
 import json
-from itertools import zip_longest
-
 import ftfy
 import numpy as np
 import requests
+from tqdm import tqdm
 from transformers import GPT2TokenizerFast
+
+from tasks.util import sample_batch
 
 
 def preprocess(text):
     return ftfy.fix_text(text, normalization="NFKC")
 
-
-def grouper(n, iterable, fillvalue):
-    "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * n
-    return zip_longest(fillvalue=fillvalue, *args)
 
 class LambadaTask:
     def __init__(self, max_ctx):
@@ -47,33 +43,27 @@ class LambadaTask:
             })
 
     def sample_batch(self, bs):
-        zero_example = {
-            "obs": np.zeros_like(self.examples[0]["obs"]),
-            "target": np.zeros_like(self.examples[0]["target"]),
-            "eval_mask": np.zeros_like(self.examples[0]["eval_mask"]),
-            "ctx_length": 0,
+        return sample_batch(self.examples, bs)
+
+    def run(self, bs, tpu):
+        total = 0
+        correct = 0
+        last_correct = 0
+        total_last_loss = 0
+
+        for batch in tqdm(self.sample_batch(bs), total=len(self.examples)//bs,  desc="lambada eval"):
+            out = tpu.eval(batch)
+            total += out["total"]
+            correct += out["correct"]
+            last_correct += out["last_correct"]
+            total_last_loss += out["last_loss"]
+
+        return {
+            "lambada/acc": correct / total,
+            "lambada/fake_acc": last_correct / total,
+            "lambada/fake_ppl": np.exp(total_last_loss / total),
         }
 
-        for batch in grouper(bs, self.examples, zero_example):
-            batch_flattened = {
-                "obs": [],
-                "target": [],
-                "eval_mask": [],
-                "ctx_length": [],
-            }
-
-            for sample in batch:
-                batch_flattened["obs"].append(sample["obs"])
-                batch_flattened["target"].append(sample["target"])
-                batch_flattened["eval_mask"].append(sample["eval_mask"])
-                batch_flattened["ctx_length"].append(sample["ctx_length"])
-
-            batch_flattened["obs"] = np.array(batch_flattened["obs"])
-            batch_flattened["target"] = np.array(batch_flattened["target"])
-            batch_flattened["eval_mask"] = np.array(batch_flattened["eval_mask"])
-            batch_flattened["ctx_length"] = np.array(batch_flattened["ctx_length"])
-
-            yield batch_flattened
 
 if __name__ == "__main__":
     l = LambadaTask(2048)

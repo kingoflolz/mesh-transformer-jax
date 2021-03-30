@@ -53,6 +53,7 @@ class CausalTransformerShard(hk.Module):
         return {
             "loss": loss.mean(),
             "last_loss": loss[-1].mean(),
+            "all_loss": loss,
             "correct": correct
         }
 
@@ -114,7 +115,7 @@ class CausalTransformer:
                 transformer = CausalTransformerShard(config)
                 out = transformer.loss(x, y, z_loss=True)
 
-                return out["loss"], out
+                return out["loss"], out["last_loss"]
 
             train_loss_fn = hk.without_apply_rng(hk.transform(train_loss)).apply
 
@@ -122,10 +123,10 @@ class CausalTransformer:
                 ctx, tgt = batch
 
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
-                (loss, aux_stuff), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
+                (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
 
                 new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
-                return new_grad, (loss, aux_stuff)
+                return new_grad, (loss, last_loss)
 
             if ctx.shape[0] == 1:
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)

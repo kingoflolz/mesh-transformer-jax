@@ -6,7 +6,9 @@ import numpy as np
 import wandb
 from tqdm import tqdm
 
-from lambada import LambadaTask
+from tasks.lambada import LambadaTask
+from tasks.winogrande import WinograndeTask
+
 from mesh_transformer.build_model import build_model
 from tfrecord_loader import TFRecordNewInputs
 
@@ -46,23 +48,25 @@ if __name__ == "__main__":
     seq = params["seq"]
     norm = params["norm"]
 
+    total_batch = per_replica_batch * tpu_size // cores_per_replica
+
+    val_dataset = TFRecordNewInputs(f"data/{params['val_set']}",
+                                    batch_size=(total_batch,),
+                                    sample_size=seq)
+
+    lambada = LambadaTask(seq)
+    winogrande = WinograndeTask(seq)
+
     t = build_model(params, tpu_name, region, preemptible)
 
-    val_dataset = LambadaTask(2048)
-
     step, aux = t.load(bucket, model_dir)
+    t.move()
 
-    start = time.time()
-    t.eval(next(val_dataset.sample_batch(per_replica_batch * tpu_size // cores_per_replica)))
-    print(f"Eval fn compiled in {time.time() - start:.06}s")
+    print(lambada.run(total_batch, t))
+    print(winogrande.run(total_batch, t))
 
-    total = 0
-    correct = 0
-
-    for batch in tqdm(val_dataset.sample_batch(per_replica_batch * tpu_size // cores_per_replica)):
-        out = t.eval(batch)
-        total += out["total"]
-        correct += out["correct"]
-
-    print("total", total)
-    print("correct", correct)
+    val_loss = []
+    for i in tqdm(val_dataset.sample_once(), desc=f"validation set"):
+        val_loss.append(t.eval(i))
+    val_loss = np.array(val_loss).mean()
+    print(f"validation loss for step {step}: {val_loss}")
