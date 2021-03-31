@@ -28,7 +28,7 @@ class WinograndeTask:
                 correct_sentence = sentence.replace("_", i["option2"])
                 wrong_sentence = sentence.replace("_", i["option1"])
             else:
-                Exception("uh oh")
+                raise Exception("uh oh")
 
             correct_sentence = self.tokenizer(correct_sentence)["input_ids"]
             wrong_sentence = self.tokenizer(wrong_sentence)["input_ids"]

@@ -66,7 +66,7 @@ if __name__ == "__main__":
     print(winogrande.run(total_batch, t))
 
     val_loss = []
-    for i in tqdm(val_dataset.sample_once(), desc=f"validation set"):
+    for i, _ in tqdm(zip(val_dataset.sample_once(), range(500)), desc=f"validation set"):
         val_loss.append(t.eval(i))
     val_loss = np.array(val_loss).mean()
     print(f"validation loss for step {step}: {val_loss}")
