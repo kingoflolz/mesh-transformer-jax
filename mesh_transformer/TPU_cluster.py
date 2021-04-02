@@ -76,6 +76,7 @@ class TPUCluster:
 
             total_last_loss = 0
             mask_loss = []
+            each_correct = []
 
             for input, output in zip(data_chunked, ray.get(res)):
                 correct_and_valid = np.logical_and(output["correct"], input["eval_mask"])
@@ -86,6 +87,8 @@ class TPUCluster:
                 correct_example = np.logical_and(valid_tokens_count == correct_tokens_count, valid_tokens_count > 0)
                 valid_example = valid_tokens_count > 0
                 last_correct_example = correct_and_valid[:, -1]
+
+                each_correct += correct_example.tolist()
 
                 total += sum(valid_example)
                 correct += sum(correct_example)
@@ -100,7 +103,8 @@ class TPUCluster:
                 "correct": correct,
                 "last_correct": last_correct,
                 "last_loss": total_last_loss,
-                "mask_loss": np.array(mask_loss)
+                "mask_loss": np.array(mask_loss),
+                "each_correct": np.array(each_correct)
             }
         else:
             data_chunks = np.array_split(data, len(self.nodes), axis=0)
