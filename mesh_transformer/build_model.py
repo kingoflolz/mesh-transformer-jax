@@ -31,7 +31,7 @@ def build_model(params, tpu_name, region, preemptible):
 
     assert len(conns) * 8 == tpu_size, "wrong size TPU for config"
 
-    head_info = ray.init(dashboard_host="0.0.0.0")
+    head_info = ray.init(include_dashboard=False)
     address = head_info['redis_address']
 
     with multiprocessing.Pool(processes=len(conns)) as p:

@@ -16,7 +16,7 @@ class TFRecordNewInputs:
         self.index = open(index_fname).read().splitlines()
         self.clean_index = list(filter(lambda x: x not in self.used, self.index))
         self.bs = batch_size
-        self.seq = sample_size
+        # self.seq = sample_size
 
         self.sample_fn = self.sample_once()
 
@@ -32,7 +32,7 @@ class TFRecordNewInputs:
             file = tf.data.TFRecordDataset(i).map(tf_parse, num_parallel_calls=tf.data.AUTOTUNE).batch(np.prod(self.bs), drop_remainder=True).prefetch(10)
             for file_idx, (data, size) in enumerate(file):
                 data = np.array(data)
-                assert data.shape[-1] == self.seq + 1
+                # assert data.shape[-1] == self.seq + 1
 
                 if not self.file_idx_init and file_idx <= self.file_idx:
                     if file_idx % 1000 == 0:

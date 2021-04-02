@@ -1,17 +1,13 @@
 import argparse
-import functools
 import json
-import multiprocessing
 import time
 
 import numpy as np
-import optax
-import ray
 import wandb
 from tqdm import tqdm
 
 from mesh_transformer.build_model import build_model
-from tasks import LambadaTask, WinograndeTask
+from tasks import *
 from tfrecord_loader import TFRecordNewInputs
 
 
@@ -62,6 +58,7 @@ if __name__ == "__main__":
     val_batches = params["val_batches"]
     val_every = params["val_every"]
     ckpt_every = params["ckpt_every"]
+    keep_every = params["keep_every"]
 
     t = build_model(params, tpu_name, region, preemptible)
 
@@ -85,19 +82,25 @@ if __name__ == "__main__":
 
     global_val_batch = per_replica_batch * tpu_size // cores_per_replica
 
-    val_dataset = TFRecordNewInputs(f"data/{params['val_set']}",
-                                    batch_size=(global_val_batch,),
-                                    sample_size=params['seq'])
+    val_sets = {}
+
+    for k, v in params['val_set'].items():
+        val_sets[k] = TFRecordNewInputs(f"data/{v}",
+                                        batch_size=(global_val_batch,),
+                                        sample_size=seq)
 
     lambada = LambadaTask(seq)
     winogrande = WinograndeTask(seq)
+    piqa = PIQATask(seq)
+    hella = HellaSwagTask(seq, first=2560)
 
     start = time.time()
     t.train(train_dataset.get_samples())
     print(f"Train fn compiled in {time.time() - start:.06}s")
 
     start = time.time()
-    t.eval(val_dataset.get_samples())
+    for val_set in val_sets.values():
+        t.eval(val_set.get_samples())
     print(f"Eval fn compiled in {time.time() - start:.06}s")
 
     wandb.init(project='mesh-transformer-jax', entity="eleutherai", name=params["name"], config=params)
@@ -107,18 +110,22 @@ if __name__ == "__main__":
         wandb.log({'train/loss': loss, 'train/last_loss': last_loss}, step)
 
         if step % ckpt_every == 0 and step:
-            t.save(step, bucket, model_dir, aux={"train_loader": train_dataset.get_state()}, init=False)
+            t.save(step, bucket, model_dir,
+                   aux={"train_loader": train_dataset.get_state()},
+                   init=False,
+                   delete_old=step % keep_every != 0)
 
         if step % val_every == 0:
-            val_loss = []
-            for i, _ in tqdm(zip(val_dataset.sample_once(), range(val_batches)),
-                             desc=f"validation for step {step}",
-                             total=val_batches):
-                val_loss.append(t.eval(i))
-            val_loss = np.array(val_loss).mean()
-            print(f"validation loss for step {step}: {val_loss}")
+            for name, val_set in val_sets.items():
+                val_loss = []
+                for i, _ in tqdm(zip(val_set.sample_once(), range(val_batches)),
+                                 desc=f"validation for step {step}, set {name}",
+                                 total=val_batches):
+                    val_loss.append(t.eval(i))
+                val_loss = np.array(val_loss).mean()
+                print(f"validation loss for step {step}, set {name}: {val_loss}")
 
-            wandb.log({'val/loss': val_loss}, step)
+                wandb.log({f'val/loss_{name}': val_loss}, step)
 
             lambada_results = lambada.run(global_val_batch, t)
             wandb.log(lambada_results, step)
@@ -127,6 +134,14 @@ if __name__ == "__main__":
             winogrande_results = winogrande.run(global_val_batch, t)
             wandb.log(winogrande_results, step)
             print(winogrande_results)
+
+            piqa_results = piqa.run(global_val_batch, t)
+            wandb.log(piqa_results, step)
+            print(piqa_results)
+
+            hella_results = hella.run(global_val_batch, t)
+            wandb.log(hella_results, step)
+            print(hella_results)
 
         step += 1
 

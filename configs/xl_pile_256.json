@@ -1,0 +1,37 @@
+{
+  "layers": 24,
+  "d_model": 2048,
+  "n_heads": 16,
+  "n_vocab": 50400,
+  "norm": "layernorm-desync",
+
+  "seq": 2048,
+  "cores_per_replica": 2,
+  "per_replica_batch": 1,
+  "gradient_accumulation_steps": 4,
+
+  "warmup_steps": 1000,
+  "anneal_steps": 100000,
+  "lr": 2e-4,
+  "end_lr": 2e-5,
+  "weight_decay": 0.1,
+  "total_steps": 100000,
+
+  "tpu_size": 256,
+
+  "bucket": "neo-models",
+  "model_dir": "mesh_jax_pile_xl_shuffled",
+
+  "train_set": "pile.train.index",
+  "val_set": {
+    "pile": "pile.val.index",
+    "owt": "openwebtext2_new_inputs.val.index"
+  },
+
+  "val_batches": 100,
+  "val_every": 1000,
+  "ckpt_every": 1000,
+
+  "name": "GPT3_XL_pile_shuffled",
+  "comment": "Trying to replicate a MTF 1.3B run for use on a V3-256"
+}

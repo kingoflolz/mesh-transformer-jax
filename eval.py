@@ -6,8 +6,7 @@ import numpy as np
 import wandb
 from tqdm import tqdm
 
-from tasks.lambada import LambadaTask
-from tasks.winogrande import WinograndeTask
+from tasks import *
 
 from mesh_transformer.build_model import build_model
 from tfrecord_loader import TFRecordNewInputs
@@ -50,23 +49,31 @@ if __name__ == "__main__":
 
     total_batch = per_replica_batch * tpu_size // cores_per_replica
 
-    val_dataset = TFRecordNewInputs(f"data/{params['val_set']}",
-                                    batch_size=(total_batch,),
-                                    sample_size=seq)
+    val_sets = {}
+
+    for k, v in params['val_set'].items():
+        val_sets[k] = TFRecordNewInputs(f"data/{v}",
+                                        batch_size=(total_batch,),
+                                        sample_size=seq)
 
     lambada = LambadaTask(seq)
     winogrande = WinograndeTask(seq)
+    piqa = PIQATask(seq)
+    hella = HellaSwagTask(seq, first=2560)
 
     t = build_model(params, tpu_name, region, preemptible)
 
     step, aux = t.load(bucket, model_dir)
     t.move()
 
+    print(hella.run(total_batch, t))
+    print(piqa.run(total_batch, t))
     print(lambada.run(total_batch, t))
     print(winogrande.run(total_batch, t))
 
-    val_loss = []
-    for i, _ in tqdm(zip(val_dataset.sample_once(), range(500)), desc=f"validation set"):
-        val_loss.append(t.eval(i))
-    val_loss = np.array(val_loss).mean()
-    print(f"validation loss for step {step}: {val_loss}")
+    for name, val_set in val_sets.items():
+        val_loss = []
+        for i, _ in tqdm(zip(val_set.sample_once(), range(500)), desc=f"validation set"):
+            val_loss.append(t.eval(i))
+        val_loss = np.array(val_loss).mean()
+        print(f"validation loss for step {step}, set {name}: {val_loss}")

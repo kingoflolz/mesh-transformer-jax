@@ -144,7 +144,7 @@ class TPUCluster:
         print(f"Checkpoint@step{step} restored in {time.time() - start:.06}s")
         return step, meta["aux"][str(ckpt_step)]
 
-    def save(self, step, bucket, path, aux=None, init=False, overwrite=False, keep_n=3):
+    def save(self, step, bucket, path, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
         assert path
         client = storage.Client()
 
@@ -190,11 +190,14 @@ class TPUCluster:
             except:
                 print(f"failed to delete the aux state for {step}")
 
-            print(f"deleting checkpoint {ckpt_to_delete}")
-            for blob in client.list_blobs(bucket, prefix=f"{path}/step_{ckpt_to_delete}/"):
-                # print(f"deleting {blob.name}")
-                assert path in blob.name
-                blob.delete()
+            if delete_old:
+                print(f"deleting checkpoint {ckpt_to_delete}")
+                for blob in client.list_blobs(bucket, prefix=f"{path}/step_{ckpt_to_delete}/"):
+                    # print(f"deleting {blob.name}")
+                    assert path in blob.name
+                    blob.delete()
+            else:
+                print(f"keeping checkpoint {ckpt_to_delete}")
 
         all_aux[step] = aux
         meta["aux"] = all_aux
