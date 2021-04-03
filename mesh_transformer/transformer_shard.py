@@ -71,16 +71,17 @@ class CausalTransformerShard(hk.Module):
         states = []
 
         for l in self.transformer_layers:
-            res, layer_state = l.get_init_decode_state(x, length, attn_bias)
+            res, layer_state = l.get_init_decode_state(x, length - 1, attn_bias)
             x = x + res
             states.append(layer_state)
 
-        return self.proj(x), (last, states)
+        return self.proj(x), (last.astype(jnp.uint32), states, hk.next_rng_key())
 
     def generate_once(self, new_tok, state):
-        ctx_len = state[0]["v"].shape[0]
+        input_len = state[0]["v"].shape[0]
 
-        attn_bias = self.rpe(1, ctx_len, self.heads_per_shard, 32)
+        attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        attn_bias = attn_bias[:, -1:, :]
 
         x = self.embed(new_tok)
 
@@ -170,12 +171,14 @@ class CausalTransformer:
                 _, initial_state = transformer.generate_initial(context, ctx_length)
 
                 def generate_scan_fn(carry, sampler_input):
-                    next_token, state = carry
-                    output, new_state = transformer.generate_once(next_token, state)
-                    next_token, sample_info = sampler(output, sampler_input)
+                    next_token, decode_state, sample_key = carry
+                    sample_key, new_key = jax.random.split(sample_key)
+
+                    output, new_state = transformer.generate_once(next_token, decode_state)
+                    next_token, sample_info = sampler(sample_key, output, sampler_input)
 
                     output = (next_token, sample_info)
-                    new_carry = (next_token, new_state)
+                    new_carry = (next_token, new_state, new_key)
                     return new_carry, output
 
                 final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
@@ -291,5 +294,5 @@ class CausalTransformer:
         return self.generate_xmap(self.state,
                                   jnp.array(key.take(batch_size)),
                                   ctx,
-                                  np.array(ctx_length, dtype=np.int32),
+                                  np.array(ctx_length, dtype=np.uint32),
                                   aux)

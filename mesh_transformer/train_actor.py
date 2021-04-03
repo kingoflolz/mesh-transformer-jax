@@ -44,6 +44,8 @@ class NetworkRunner(object):
                     self.output_q.put(network.train(input))
                 elif operation == "eval":
                     self.output_q.put(network.eval(input))
+                elif operation == "generate":
+                    self.output_q.put(network.generate(*input))
                 elif operation == "write_ckpt":
                     path, shard = input
                     write_ckpt(network.state, path, shard)
@@ -75,6 +77,10 @@ class NetworkRunner(object):
 
     def eval(self, sample):
         self.input_q.put(("eval", sample))
+        return self.output_q.get()
+
+    def generate(self, input):
+        self.input_q.put(("generate", input))
         return self.output_q.get()
 
     def write_ckpt(self, path, shard):

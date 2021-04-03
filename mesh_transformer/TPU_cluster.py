@@ -118,8 +118,21 @@ class TPUCluster:
 
             return np.array([i["loss"] for i in ray.get(res)]).mean()
 
+    def generate(self, context, ctx_length, gen_len):
+        context = np.array_split(context, len(self.nodes), axis=0)
+        ctx_length = np.array_split(ctx_length, len(self.nodes), axis=0)
+
+        res = []
+        for n, ctx, l in zip(self.nodes, context, ctx_length):
+            res.append(n.generate.remote((
+                ctx,
+                np.ones(len(ctx), dtype=np.uint32) * l,
+                gen_len
+            )))
+
+        return np.concatenate([i[1][0][:, :, 0] for i in ray.get(res)], axis=0)
+
     def move(self):
-        # do replicated checkpoint reading
         start = time.time()
         res = []
         for node in self.nodes:

@@ -222,7 +222,7 @@ class TransformerLayerShard(hk.Module):
 
         return g_psum(attn_out + dense_out)
 
-    # iterate the decoding process a single token
+    # iterate the decoding process by a single token
     def decode_once(self, decode_state, x, attn_bias):
         x = f_psum(x)
         x = self.norm(x)
@@ -232,26 +232,26 @@ class TransformerLayerShard(hk.Module):
         q, v, k = self.qvk_proj(x)
 
         # add new kv to end
-        k = jnp.concatenate((decode_state["k"], k), axis=0)[1:]
         v = jnp.concatenate((decode_state["v"], v), axis=0)[1:]
+        k = jnp.concatenate((decode_state["k"], k), axis=0)[1:]
 
-        decode_state["tokens_decoded"] += 1
-        decode_state["k"] = k
-        decode_state["v"] = v
-
-        tokens_decoded = decode_state["tokens_decoded"]
-        length = decode_state["v"].shape[0]
+        tokens_decoded = decode_state["tokens_decoded"] + 1
+        length = v.shape[0]
 
         masked_tokens = length - tokens_decoded
 
         attention_mask = jnp.arange(0, length) < masked_tokens
-        bias = 0  # (-1e10 * attention_mask)
+        bias = (-1e10 * attention_mask)
         bias += attn_bias
 
         attn_out = self.self_attn(q, v, k, bias)
         dense_out = self.ff(x)
 
-        return g_psum(attn_out + dense_out), decode_state
+        return g_psum(attn_out + dense_out), {
+            "tokens_decoded": tokens_decoded,
+            "k": k,
+            "v": v
+        }
 
     # take in right aligned context tokens and generate an initial state
     def get_init_decode_state(self, x, given_length, attn_bias):
@@ -267,13 +267,13 @@ class TransformerLayerShard(hk.Module):
         causal_mask = np.tril(np.ones((seq_len, seq_len)))
 
         bias = -1e10 * (1. - causal_mask)  # regular AR masking
-        # bias -= 1e10 * (jnp.arange(0, full_length) < masked_tokens)  # mask out zero tokens before context starts
+        bias -= 1e10 * (jnp.arange(0, full_length) < masked_tokens)  # mask out zero tokens before context starts
         bias += attn_bias  # finally add attn bias for rpe
 
         attn_out = self.self_attn(q, v, k, bias)
         dense_out = self.ff(x)
 
-        return g_psum(attn_out + dense_out), {"k": k, "v": v, "tokens_decoded": given_length}
+        return g_psum(attn_out + dense_out), {"k": k, "v": v, "tokens_decoded": given_length.astype(jnp.uint32)}
 
 
 class ProjectionShard(hk.Module):
