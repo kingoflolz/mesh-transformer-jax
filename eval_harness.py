@@ -39,10 +39,10 @@ if __name__ == "__main__":
     d_model = params["d_model"]
     n_heads = params["n_heads"]
     n_vocab = params["n_vocab"]
-    seq = params["seq"]
+    seq = 1024  # params["seq"]
     norm = params["norm"]
 
-    total_batch = per_replica_batch * tpu_size // cores_per_replica
+    total_batch = per_replica_batch * tpu_size // cores_per_replica * 4
 
     t = build_model(params, tpu_name, region, preemptible)
     adaptor = EvalHarnessAdaptor(t, seq, total_batch)
@@ -54,6 +54,8 @@ if __name__ == "__main__":
                                                                "piqa",
                                                                "hellaswag",
                                                                "winogrande",
+                                                               "mathqa",
+                                                               "pubmedqa",
                                                                # "boolq",
                                                                # "cb",
                                                                # "copa",
@@ -62,5 +64,11 @@ if __name__ == "__main__":
                                                                # "wic",
                                                                # "wsc",
                                                                ]), False, 0, None)
+    dumped = json.dumps(results, indent=2)
+    print(dumped)
+
+    results = evaluator.evaluate(adaptor, tasks.get_task_dict(["lambada_cloze",
+                                                               ]), False, 15, None)
+
     dumped = json.dumps(results, indent=2)
     print(dumped)
