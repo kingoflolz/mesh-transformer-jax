@@ -3,9 +3,6 @@ import time
 import numpy as np
 from queue import Queue
 
-from mesh_transformer.checkpoint import write_ckpt, read_ckpt
-from mesh_transformer.transformer_shard import CausalTransformer
-
 
 @ray.remote(resources={"tpu": 1})
 class NetworkRunner(object):
@@ -21,6 +18,8 @@ class NetworkRunner(object):
         import jax
         from jax.experimental.maps import thread_resources, ResourceEnv, Mesh
         import haiku as hk
+        from mesh_transformer.checkpoint import write_ckpt, read_ckpt
+        from mesh_transformer.transformer_shard import CausalTransformer
         # jax.experimental.maps.EXPERIMENTAL_SPMD_LOWERING = True
 
         thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
