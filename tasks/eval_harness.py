@@ -22,7 +22,7 @@ class EvalHarnessAdaptor(LM):
 
     def request_iter(self, requests):
         for ctx, cont in requests:
-            ctx_tokens = self.tokenizer.encode(ctx)
+            ctx_tokens = self.tokenizer.encode("<|endoftext|>" + ctx)
             cont_tokens = self.tokenizer.encode(cont)
 
             all_tokens = ctx_tokens + cont_tokens
@@ -32,8 +32,8 @@ class EvalHarnessAdaptor(LM):
             pad_amount = self.seq - provided_ctx
 
             yield {
-                "obs": np.pad(all_tokens[:-1], ((pad_amount, 0),)),
-                "target": np.pad(all_tokens[1:], ((pad_amount, 0),)),
+                "obs": np.pad(all_tokens[:-1], ((pad_amount, 0),), constant_values=50256),
+                "target": np.pad(all_tokens[1:], ((pad_amount, 0),), constant_values=50256),
                 "ctx_length": provided_ctx,
                 "eval_mask": np.arange(0, self.seq) > (self.seq - len(cont_tokens) - 1),
             }

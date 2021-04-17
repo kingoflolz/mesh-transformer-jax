@@ -107,7 +107,7 @@ class CausalTransformer:
 
             eval_loss_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply
 
-            mask = (jnp.arange(0, len(ctx)) < (len(ctx) - ctx_length - 1)) * -1e10
+            mask = (jnp.arange(0, len(ctx)) < (len(ctx) - ctx_length)) * -1e10
 
             return eval_loss_fn(to_bf16(state["params"]), ctx, tgt, mask)
 
