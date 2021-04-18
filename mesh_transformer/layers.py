@@ -203,6 +203,7 @@ class TransformerLayerShard(hk.Module):
         self.dim_per_head = dim // heads
         self.heads_per_shard = heads // shards
         self.dim_per_shard = dim // shards
+        self.pe_rotary_dims = config.get("pe_rotary_dims", self.dim_per_head)
 
         self.norm = norm
 
@@ -219,9 +220,18 @@ class TransformerLayerShard(hk.Module):
 
     def self_attn(self, q, v, k, attn_bias):
         if self.is_rotary:
-            sincos = fixed_pos_embedding(k)
-            q = apply_rotary_pos_emb(q, sincos)
-            k = apply_rotary_pos_emb(k, sincos)
+            k_rot = k[:, :, :self.pe_rotary_dims]
+            k_pass = k[:, :, self.pe_rotary_dims:]
+
+            q_rot = q[:, :, :self.pe_rotary_dims]
+            q_pass = q[:, :, self.pe_rotary_dims:]
+
+            sincos = fixed_pos_embedding(k_rot)
+            q_rot = apply_rotary_pos_emb(q_rot, sincos)
+            k_rot = apply_rotary_pos_emb(k_rot, sincos)
+
+            k = jnp.concatenate([k_rot, k_pass], axis=-1)
+            q = jnp.concatenate([q_rot, q_pass], axis=-1)
 
         attention_logits = jnp.einsum("thd,Thd->htT", q, k)
 

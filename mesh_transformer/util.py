@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from optax._src.transform import OptState, GradientTransformation
+from optax._src.transform import OptState, GradientTransformation, AdditiveWeightDecayState
 
 
 def gpt3_schedule(warmup_steps,
@@ -48,6 +48,26 @@ def clip_by_global_norm(max_norm) -> GradientTransformation:
         trigger = g_norm < max_norm
         updates = jax.tree_map(
             lambda t: jnp.where(trigger, t, (t / g_norm) * max_norm), updates)
+        return updates, state
+
+    return GradientTransformation(init_fn, update_fn)
+
+
+def additive_weight_decay(weight_decay: float = 0.0) -> GradientTransformation:
+    """Add parameter scaled by `weight_decay`, to all parameters with more than one dim (i.e. exclude ln, bias etc)
+
+    Args:
+      weight_decay: a scalar weight decay rate.
+
+    Returns:
+      An (init_fn, update_fn) tuple.
+    """
+
+    def init_fn(_):
+        return AdditiveWeightDecayState()
+
+    def update_fn(updates, state, params):
+        updates = jax.tree_multimap(lambda g, p: g + weight_decay * p * (len(g.shape) > 1), updates, params)
         return updates, state
 
     return GradientTransformation(init_fn, update_fn)
@@ -110,7 +130,6 @@ def g_psum_bwd(_, g):
 
 
 g_psum.defvjp(g_psum_fwd, g_psum_bwd)
-
 
 if __name__ == "__main__":
     sch = gpt3_schedule(1_000, 20_000, 1e-4, 1e-5)
