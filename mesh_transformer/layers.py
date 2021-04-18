@@ -2,6 +2,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
+from einops import rearrange, repeat
 
 from mesh_transformer.util import f_psum, g_psum
 
@@ -122,6 +123,29 @@ class RelativePositionEmbs(hk.Module):
         return values
 
 
+def fixed_pos_embedding(x, seq_dim=0):
+    dim = x.shape[-1]
+    inv_freq = 1. / (10000 ** (np.arange(0, dim, 2) / dim))
+
+    sinusoid_inp = np.einsum('i , j -> i j', np.arange(x.shape[seq_dim]), inv_freq)
+
+    return np.sin(sinusoid_inp), np.cos(sinusoid_inp)
+
+
+def rotate_every_two(x):
+    x1 = x[:, :, ::2]
+    x2 = x[:, :, 1::2]
+
+    x = jnp.stack((-x2, x1), axis=-1)
+
+    return rearrange(x, '... d j -> ... (d j)')
+
+
+def apply_rotary_pos_emb(x, sincos):
+    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j=2)[:, None, :], sincos)
+    return (x * cos) + (rotate_every_two(x) * sin)
+
+
 class EmbeddingShard(hk.Module):
     def __init__(self, config, name=None):
         super().__init__(name=name)
@@ -134,9 +158,14 @@ class EmbeddingShard(hk.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.in_dim_per_shard = in_dim // shards
+        self.out_dim_per_shard = out_dim // shards
 
-        # embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
-        # self.positional_embeddings = hk.get_parameter('pos_embs', [seq_length, self.out_dim_per_shard], init=embed_init)
+        if config["pe"] == "fixed":
+            embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
+            self.positional_embeddings = hk.get_parameter('pos_embs', [config["seq"], self.out_dim_per_shard], init=embed_init)
+        else:
+            self.positional_embeddings = None
+
         self.proj = hk.Linear(self.out_dim, w_init=hk.initializers.TruncatedNormal(stddev=1 / np.sqrt(in_dim)))
 
     def __call__(self, x, dtype=jnp.bfloat16):
@@ -145,10 +174,16 @@ class EmbeddingShard(hk.Module):
         input_onehot = jax.nn.one_hot(x - shard_start_index, self.in_dim_per_shard)
         proj_out = self.proj(input_onehot)
 
-        # all_pos_embed = jax.lax.all_gather(self.positional_embeddings, 'shard')
-        # all_pos_embed = hk.Flatten()(jnp.transpose(all_pos_embed, (1, 0, 2)))
+        proj_out = g_psum(proj_out)
 
-        return g_psum(proj_out)  # + all_pos_embed
+        if self.positional_embeddings is not None:
+            all_pos_embed = jax.lax.all_gather(self.positional_embeddings, 'shard')
+
+            all_pos_embed = hk.Flatten()(jnp.transpose(all_pos_embed, (1, 0, 2)))
+
+            proj_out += all_pos_embed
+
+        return proj_out
 
 
 # We actually combine the FF and dense in one layer (i.e. compute in parallel) to minimize all reduces
@@ -159,6 +194,7 @@ class TransformerLayerShard(hk.Module):
         dim = config["d_model"]
         shards = config["cores_per_replica"]
         norm = getnorm(config["norm"])
+        self.is_rotary = config["pe"] == "rotary"
 
         assert dim % heads == 0
         assert heads % shards == 0
@@ -182,6 +218,11 @@ class TransformerLayerShard(hk.Module):
                                       w_init=hk.initializers.TruncatedNormal(stddev=init_scale / np.sqrt(self.dim)))
 
     def self_attn(self, q, v, k, attn_bias):
+        if self.is_rotary:
+            sincos = fixed_pos_embedding(k)
+            q = apply_rotary_pos_emb(q, sincos)
+            v = apply_rotary_pos_emb(v, sincos)
+
         attention_logits = jnp.einsum("thd,Thd->htT", q, k)
 
         sqrt_key_size = np.sqrt(self.dim_per_head).astype(k.dtype)

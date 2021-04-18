@@ -60,6 +60,9 @@ if __name__ == "__main__":
     ckpt_every = params["ckpt_every"]
     keep_every = params["keep_every"]
 
+    pe = params["pe"]
+    assert pe in ["fixed", "rotary", "t5"]
+
     t = build_model(params, tpu_name, region, preemptible)
 
     try:

@@ -32,12 +32,20 @@ class CausalTransformerShard(hk.Module):
             self.transformer_layers.append(TransformerLayerShard(config, name=f"layer_{i}", init_scale=init_scale))
 
         self.proj = ProjectionShard(config)
-        self.rpe = RelativePositionEmbs()
+
+        if config["pe"] == "t5":
+            self.rpe = RelativePositionEmbs()
+        else:
+            self.rpe = None
 
     def eval(self, context, target, z_loss=0., mask=0.0):
         input_len = context.shape[0]
 
-        attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        if self.rpe is not None:
+            attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        else:
+            attn_bias = 0
+
         attn_bias += mask
 
         x = hk.remat(self.embed)(context)
