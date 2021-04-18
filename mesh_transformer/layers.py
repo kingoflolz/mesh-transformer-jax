@@ -221,7 +221,7 @@ class TransformerLayerShard(hk.Module):
         if self.is_rotary:
             sincos = fixed_pos_embedding(k)
             q = apply_rotary_pos_emb(q, sincos)
-            v = apply_rotary_pos_emb(v, sincos)
+            k = apply_rotary_pos_emb(k, sincos)
 
         attention_logits = jnp.einsum("thd,Thd->htT", q, k)
 
