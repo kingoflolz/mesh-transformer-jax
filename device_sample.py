@@ -1,5 +1,4 @@
 import argparse
-import functools
 import json
 import time
 
@@ -9,7 +8,7 @@ import optax
 
 from mesh_transformer import util
 from mesh_transformer.checkpoint import read_ckpt
-from mesh_transformer.sampling import softmax_sample
+from mesh_transformer.sampling import nucleaus_sample
 from mesh_transformer.transformer_shard import CausalTransformer
 import transformers
 from smart_open import open
@@ -20,14 +19,7 @@ from mesh_transformer.util import clip_by_global_norm
 def parse_args():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tpu", type=str, help="Name of TPU to train on.")
-    parser.add_argument("--tpu_region", type=str, help="Region of TPU to train on.")
-    parser.add_argument("--preemptible", action="store_true")
-
     parser.add_argument("--config", type=str, default=None, help="Config file location")
-
-    parser.add_argument("--new", action="store_true", help="If set, deletes previous checkpoint, if it exists, and "
-                                                           "starts a new training run")
 
     args = parser.parse_args()
     return args
@@ -36,16 +28,6 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     params = json.load(open(args.config))
-
-    if args.new:
-        print(f"Starting experiment {params['name']} from scratch! "
-              f"all data in gs://{params['bucket']}/{params['model_dir']}/ will be deleted")
-        input("Hit enter to continue")
-
-    tpu_name = args.tpu
-    region = args.tpu_region
-    preemptible = args.preemptible
-    clean_start = args.new
 
     gradient_accumulation_steps = params.get("gradient_accumulation_steps", 1)
     per_replica_batch = params["per_replica_batch"]
@@ -62,7 +44,7 @@ if __name__ == "__main__":
     seq = params["seq"]
     norm = params["norm"]
 
-    params["sampler"] = softmax_sample
+    params["sampler"] = nucleaus_sample
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
         clip_by_global_norm(1),
@@ -114,7 +96,8 @@ if __name__ == "__main__":
             batched_tokens = np.array([padded_tokens] * total_batch)
             length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
 
-            output = network.generate(batched_tokens, length, 512)
+            output = network.generate(batched_tokens, length, 512, {"top_p": np.ones(total_batch) * 0.9,
+                                                                    "temp": np.ones(total_batch) * 0.75})
 
             for idx, o in enumerate(output[1][0][:, :, 0]):
                 print(f"sample {idx}: {repr(tokenizer.decode(o))}")

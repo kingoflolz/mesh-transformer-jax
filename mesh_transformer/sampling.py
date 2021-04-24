@@ -3,8 +3,8 @@ import jax.numpy as jnp
 
 
 # takes in a logit distribution, softmax and then sample
-def softmax_sample(key, logits, _):
-    return jax.random.categorical(key, logits/0.75, -1).astype(jnp.uint32), None
+def softmax_sample(key, logits, _, temp=1):
+    return jax.random.categorical(key, logits/temp, -1).astype(jnp.uint32), None
 
 
 def nucleaus_filter(logits, top_p=0.9):
@@ -25,10 +25,10 @@ def nucleaus_filter(logits, top_p=0.9):
     return logits
 
 
-def nucleaus_sample(key, logits, _, top_p=0.9):
+def nucleaus_sample(key, logits, _, top_p=0.9, temp=1):
     logits = nucleaus_filter(logits, top_p)
 
-    return softmax_sample(key, logits, None)
+    return softmax_sample(key, logits, None, temp=temp)
 
 
 if __name__ == "__main__":

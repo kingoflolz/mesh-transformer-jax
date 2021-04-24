@@ -170,7 +170,7 @@ class CausalTransformer:
                 "opt_state": optimizer.init(params)
             }
 
-        def generate(state, key, ctx, ctx_length, aux):
+        def generate(state, key, ctx, ctx_length, aux, sampler_options):
             sampler = config["sampler"]
             gen_length = self.gen_length
 
@@ -183,7 +183,7 @@ class CausalTransformer:
                     sample_key, new_key = jax.random.split(sample_key)
 
                     output, new_state = transformer.generate_once(next_token, decode_state)
-                    next_token, sample_info = sampler(sample_key, output, sampler_input)
+                    next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
                     output = (next_token, sample_info)
                     new_carry = (next_token, new_state, new_key)
@@ -219,6 +219,7 @@ class CausalTransformer:
 
         self.generate_xmap = jax.experimental.maps.xmap(fun=generate,
                                                         in_axes=(["shard", ...],
+                                                                 ["batch", ...],
                                                                  ["batch", ...],
                                                                  ["batch", ...],
                                                                  ["batch", ...],
@@ -292,7 +293,7 @@ class CausalTransformer:
         # print(f"eval done in {time.time() - start:.06}s")
         return out
 
-    def generate(self, ctx, ctx_length, gen_length):
+    def generate(self, ctx, ctx_length, gen_length, sampler_options):
         key = hk.PRNGSequence(random.randint(0, 2 ** 60))
 
         batch_size = ctx.shape[0]
@@ -303,4 +304,5 @@ class CausalTransformer:
                                   jnp.array(key.take(batch_size)),
                                   ctx,
                                   np.array(ctx_length, dtype=np.uint32),
-                                  aux)
+                                  aux,
+                                  sampler_options)
