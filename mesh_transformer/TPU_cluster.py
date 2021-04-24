@@ -10,9 +10,11 @@ import numpy as np
 from mesh_transformer.train_actor import NetworkRunner
 from google.cloud import storage
 from smart_open import open
+from func_timeout import func_set_timeout
 
 
 class TPUCluster:
+    @func_set_timeout(600)
     def __init__(self,
                  mesh_shape,
                  node_count,
@@ -37,6 +39,7 @@ class TPUCluster:
         self.param_count = ray.get(params)[0]
         print(f"Ray actors created in {time.time() - start:.06}s")
 
+    @func_set_timeout(600)
     def train(self, data):
         data_chunks = np.array_split(data, len(self.nodes), axis=1)
 
@@ -58,6 +61,7 @@ class TPUCluster:
 
         return np.array(loss).mean(), np.array(last_loss).mean()
 
+    @func_set_timeout(600)
     def eval(self, data):
         if isinstance(data, dict):
             data_chunked = [{} for _ in self.nodes]
@@ -118,6 +122,7 @@ class TPUCluster:
 
             return np.array([i["loss"] for i in ray.get(res)]).mean()
 
+    @func_set_timeout(600)
     def generate(self, context, ctx_length, gen_len):
         context = np.array_split(context, len(self.nodes), axis=0)
         ctx_length = np.array_split(ctx_length, len(self.nodes), axis=0)
@@ -132,6 +137,7 @@ class TPUCluster:
 
         return np.concatenate([i[1][0][:, :, 0] for i in ray.get(res)], axis=0)
 
+    @func_set_timeout(600)
     def move(self):
         start = time.time()
         res = []
@@ -141,6 +147,7 @@ class TPUCluster:
 
         print(f"Moved weights to TPU in {time.time() - start:.06}s")
 
+    @func_set_timeout(1200)
     def load(self, bucket, path):
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:
             meta = json.load(f)
@@ -161,6 +168,7 @@ class TPUCluster:
         print(f"Checkpoint@step{step} restored in {time.time() - start:.06}s")
         return step, meta["aux"][str(ckpt_step)]
 
+    @func_set_timeout(600)
     def save(self, step, bucket, path, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
         assert path
         client = storage.Client()

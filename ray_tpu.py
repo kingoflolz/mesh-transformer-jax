@@ -30,6 +30,23 @@ def create_tpu(
         'Content-Type': 'application/json',
     }
 
+    try:
+        status = check_tpu(name, zone)
+
+        if status["state"] not in ["CREATING", "READY"]:
+            delete_tpu(name, zone)
+
+            while True:
+                try:
+                    print("deleting check")
+                    print(check_tpu(name, zone))
+
+                    time.sleep(1)
+                except:
+                    break
+    except:
+        pass
+
     params = (
         ('node_id', name),
     )
@@ -81,6 +98,7 @@ def wait_til(name, zone, state):
     while True:
         ret = check_tpu(name, zone)
 
+        print("wait_til check")
         print(ret)
 
         matches = True

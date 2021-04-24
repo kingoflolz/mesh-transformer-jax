@@ -27,7 +27,7 @@ def parse_args():
     return args
 
 
-if __name__ == "__main__":
+def main(first=True):
     args = parse_args()
     params = json.load(open(args.config))
 
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     tpu_name = args.tpu
     region = args.tpu_region
     preemptible = args.preemptible
-    clean_start = args.new
+    clean_start = args.new and first
 
     gradient_accumulation_steps = params.get("gradient_accumulation_steps", 1)
     per_replica_batch = params["per_replica_batch"]
@@ -150,3 +150,15 @@ if __name__ == "__main__":
 
     ray.shutdown()
     delete_tpu(tpu_name, region)
+
+
+if __name__ == "__main__":
+    first = True
+    while True:
+        try:
+            main(first)
+        except KeyboardInterrupt:
+            break
+        except:
+            pass
+        first = False
