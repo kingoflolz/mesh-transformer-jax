@@ -148,9 +148,6 @@ def main(first=True):
 
         step += 1
 
-    ray.shutdown()
-    delete_tpu(tpu_name, region)
-
 
 if __name__ == "__main__":
     first = True
