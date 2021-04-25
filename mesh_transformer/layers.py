@@ -18,10 +18,10 @@ class ReplicatedLayerNorm(hk.Module):
 
         param_shape = inputs.shape[-1:]
         scale = hk.get_parameter("scale", param_shape, inputs.dtype, init=jnp.ones)
-        scale = f_psum(scale)
+        scale = jax.lax.all_gather(scale, "shard")[0]
 
         offset = hk.get_parameter("offset", param_shape, inputs.dtype, init=jnp.zeros)
-        offset = f_psum(offset)
+        offset = jax.lax.all_gather(offset, "shard")[0]
 
         scale = jnp.broadcast_to(scale, inputs.shape)
         offset = jnp.broadcast_to(offset, inputs.shape)
