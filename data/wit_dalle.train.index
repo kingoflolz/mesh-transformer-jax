@@ -1,4 +1,3 @@
-gs://neo-datasets/wikipedia_image_text/embedding/wit_0.tfrecords.zstd
 gs://neo-datasets/wikipedia_image_text/embedding/wit_10000.tfrecords.zstd
 gs://neo-datasets/wikipedia_image_text/embedding/wit_100000.tfrecords.zstd
 gs://neo-datasets/wikipedia_image_text/embedding/wit_1000000.tfrecords.zstd
