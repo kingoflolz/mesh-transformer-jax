@@ -34,12 +34,13 @@ def create_tpu(
         status = check_tpu(name, zone)
 
         if status["state"] not in ["CREATING", "READY"]:
+            print("deleting TPU")
             delete_tpu(name, zone)
 
             while True:
                 try:
                     print("deleting check")
-                    print(check_tpu(name, zone))
+                    print(check_tpu(name, zone)["state"])
 
                     time.sleep(1)
                 except:
@@ -149,7 +150,6 @@ def start_ray(conn, address):
     conn.sudo('python3 setup.py install')
 
     conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
-    conn.put("scripts/jax_pod_setup.py", "/tmp/jax_pod_setup.py")
     conn.sudo('chmod +x /tmp/ray-tpu.sh', hide=True)
     conn.sudo('/tmp/ray-tpu.sh', hide=True)
     try:
