@@ -76,7 +76,7 @@ class TFRecordNewInputs(TFRecordLoader):
 
             return tf.cast(tf.sparse.to_dense(tf.sparse.reorder(parsed_features["text"])), tf.uint32)
 
-        super().__init__(index_fname, batch_size, tf_parse, restore_state)
+        super().__init__(index_fname, batch_size, tf_parse, restore_state=restore_state)
 
 
 class TFRecordWIT(TFRecordLoader):
