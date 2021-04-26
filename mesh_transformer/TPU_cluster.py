@@ -14,7 +14,7 @@ from func_timeout import func_set_timeout
 
 
 class TPUCluster:
-    @func_set_timeout(600)
+    @func_set_timeout(1200)
     def __init__(self,
                  mesh_shape,
                  node_count,

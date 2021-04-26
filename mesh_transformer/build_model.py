@@ -12,7 +12,6 @@ from mesh_transformer.util import clip_by_global_norm, additive_weight_decay
 from ray_tpu import create_tpu, wait_til, get_connection, start_ray
 
 
-@func_set_timeout(1200)
 def build_model(params, tpu_name, region, preemptible):
     gradient_accumulation_steps = params.get("gradient_accumulation_steps", 1)
     cores_per_replica = params["cores_per_replica"]
