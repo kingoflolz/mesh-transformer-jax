@@ -61,6 +61,7 @@ def main(first=True):
     ckpt_every = params["ckpt_every"]
     keep_every = params["keep_every"]
     eval_tasks = params["eval_harness_tasks"]
+    total_steps = params["total_steps"]
 
     pe = params["pe"]
     assert pe in ["fixed", "rotary", "t5"]
@@ -81,7 +82,8 @@ def main(first=True):
 
     train_dataset = TFRecordNewInputs(f"data/{params['train_set']}",
                                       batch_size=(
-                                      gradient_accumulation_steps, per_replica_batch * tpu_size // cores_per_replica),
+                                          gradient_accumulation_steps,
+                                          per_replica_batch * tpu_size // cores_per_replica),
                                       sample_size=params['seq'],
                                       restore_state=train_load_restore)
 
@@ -111,11 +113,14 @@ def main(first=True):
         loss, last_loss = t.train(train_dataset.get_samples())
         wandb.log({'train/loss': loss, 'train/last_loss': last_loss}, step)
 
-        if step % ckpt_every == 0 and step:
+        if (step % ckpt_every == 0 and step) or step == total_steps:
             t.save(step, bucket, model_dir,
                    aux={"train_loader": train_dataset.get_state()},
                    init=False,
                    delete_old=step % keep_every != 0)
+
+            if step == total_steps:
+                return True
 
         if step % val_every == 0:
             for name, val_set in val_sets.items():
@@ -145,7 +150,9 @@ if __name__ == "__main__":
     first = True
     while True:
         try:
-            main(first)
+            ret = main(first)
+            if ret:
+                break
         except KeyboardInterrupt:
             break
         except Exception as e:
