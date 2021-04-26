@@ -17,7 +17,7 @@ from smart_open import open
 
 from mesh_transformer.util import clip_by_global_norm
 
-from flask import Flask, request
+from flask import Flask, request, make_response, jsonify
 app = Flask(__name__)
 
 requests_queue = Queue()
@@ -30,22 +30,40 @@ curl --header "Content-Type: application/json" \
 """
 
 
-@app.route('/complete', methods=['POST'])
-def hello_world():
-    content = request.json
+def _build_cors_prelight_response():
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add('Access-Control-Allow-Headers', "*")
+    response.headers.add('Access-Control-Allow-Methods', "*")
+    return response
 
-    if requests_queue.qsize() > 100:
-        return {"error": "queue full, try again later"}
 
-    response_queue = Queue()
+def _corsify_actual_response(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
-    requests_queue.put(({
-        "context": content["context"],
-        "top_p": float(content["top_p"]),
-        "temp": float(content["temp"])
-    }, response_queue))
 
-    return {"completion": response_queue.get()}
+@app.route('/complete', methods=['POST', 'OPTIONS'])
+def complete():
+    if request.method == "OPTIONS":  # CORS preflight
+        return _build_cors_prelight_response()
+    elif request.method == "POST":  # The actual request following the preflight
+        content = request.json
+
+        if requests_queue.qsize() > 100:
+            return {"error": "queue full, try again later"}
+
+        response_queue = Queue()
+
+        requests_queue.put(({
+                                "context": content["context"],
+                                "top_p": float(content["top_p"]),
+                                "temp": float(content["temp"])
+                            }, response_queue))
+
+        return _corsify_actual_response(jsonify({"completion": response_queue.get()}))
+    else:
+        raise RuntimeError("Weird - don't know how to handle method {}".format(request.method))
 
 
 def parse_args():
