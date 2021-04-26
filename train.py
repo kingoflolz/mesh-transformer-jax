@@ -1,6 +1,7 @@
 import argparse
 import json
 import time
+import traceback
 
 import numpy as np
 import wandb
@@ -96,7 +97,8 @@ def main(first=True):
                                         batch_size=(global_val_batch,),
                                         sample_size=seq)
 
-    adaptor = EvalHarnessAdaptor(t, seq, global_val_batch)
+    # run eval for 1024 tokens (unless model has fixed context length)
+    adaptor = EvalHarnessAdaptor(t, 1024 if pe is not "fixed" else seq, global_val_batch * 4)
 
     start = time.time()
     t.train(train_dataset.get_samples())
@@ -157,4 +159,5 @@ if __name__ == "__main__":
             break
         except Exception as e:
             print("Exception: ", e)
+            traceback.print_exc()
         first = False
