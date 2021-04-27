@@ -34,10 +34,13 @@ def process_request(x, seq):
     pad_amount = seq - provided_ctx
 
     return {
-        "obs": np.pad(all_tokens[:-1], ((pad_amount, 0),), constant_values=50256),
-        "target": np.pad(all_tokens[1:], ((pad_amount, 0),), constant_values=50256),
-        "ctx_length": provided_ctx,
-        "eval_mask": np.arange(0, seq) > (seq - len(cont_tokens) - 1),
+        "obs": np.pad(all_tokens[:-1], ((0, pad_amount),), constant_values=50256),
+        "target": np.pad(all_tokens[1:], ((0, pad_amount),), constant_values=50256),
+        "ctx_length": seq,
+        "eval_mask": np.logical_and(
+            np.arange(0, seq) > len(all_tokens) - len(cont_tokens) - 2,
+            np.arange(0, seq) < len(all_tokens) - 1
+        ),
     }
 
 
@@ -51,16 +54,18 @@ class EvalHarnessAdaptor(LM):
         self.batch = batch
 
         self.pool = multiprocessing.Pool(initializer=process_init)
+        process_init()
 
     def convert_requests(self, requests):
-        return list(tqdm(self.pool.imap(partial(process_request, seq=self.seq), requests), desc="request conversion"))
+        return self.pool.imap(partial(process_request, seq=self.seq), requests)
 
     def loglikelihood(self, requests):
         output = []
 
         r = self.convert_requests(requests)
+        zero_example = process_request(requests[0], self.seq)
 
-        for b in tqdm(sample_batch(r, self.batch), desc="LM eval harness", total=len(r) // self.batch):
+        for b in tqdm(sample_batch(r, self.batch, zero_example), desc="LM eval harness", total=len(requests) // self.batch):
             out = self.tpu.eval(b)
 
             for loss, correct in zip(out["mask_loss"], out["each_correct"]):

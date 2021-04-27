@@ -9,11 +9,11 @@ def grouper(n, iterable, fillvalue):
     return zip_longest(fillvalue=fillvalue, *args)
 
 
-def sample_batch(examples, bs):
+def sample_batch(examples, bs, zero_example_shape):
     zero_example = {
-        "obs": np.zeros_like(examples[0]["obs"]),
-        "target": np.zeros_like(examples[0]["target"]),
-        "eval_mask": np.zeros_like(examples[0]["eval_mask"]),
+        "obs": np.zeros_like(zero_example_shape["obs"]),
+        "target": np.zeros_like(zero_example_shape["target"]),
+        "eval_mask": np.zeros_like(zero_example_shape["eval_mask"]),
         "ctx_length": 0,
     }
 
