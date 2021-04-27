@@ -4,7 +4,7 @@ import json
 from lm_eval import evaluator, tasks
 
 from mesh_transformer.build_model import build_model
-from tasks.eval_harness import EvalHarnessAdaptor
+from tasks import EvalHarnessAdaptor
 
 
 def parse_args():
