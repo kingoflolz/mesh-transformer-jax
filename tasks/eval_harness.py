@@ -5,7 +5,7 @@ from lm_eval.base import LM
 from tqdm import tqdm
 import numpy as np
 
-from tasks.util import sample_batch
+from tasks.util import sample_batch, shrink_seq
 import multiprocessing
 
 tokenizer = None
@@ -48,10 +48,11 @@ class EvalHarnessAdaptor(LM):
     def greedy_until(self, requests):
         raise Exception("unimplemented")
 
-    def __init__(self, tpu_cluster, seq, batch):
+    def __init__(self, tpu_cluster, seq, batch, shrink):
         self.tpu = tpu_cluster
         self.seq = seq
         self.batch = batch
+        self.shrink = shrink
 
         self.pool = multiprocessing.Pool(initializer=process_init)
         process_init()
@@ -66,6 +67,9 @@ class EvalHarnessAdaptor(LM):
         zero_example = process_request(requests[0], self.seq)
 
         for b in tqdm(sample_batch(r, self.batch, zero_example), desc="LM eval harness", total=len(requests) // self.batch):
+            if self.shrink:
+                b = shrink_seq(b)
+
             out = self.tpu.eval(b)
 
             for loss, correct in zip(out["mask_loss"], out["each_correct"]):

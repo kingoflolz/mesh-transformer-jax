@@ -9,6 +9,24 @@ def grouper(n, iterable, fillvalue):
     return zip_longest(fillvalue=fillvalue, *args)
 
 
+# divide the seq length by 2 until it would truncate actual context
+def shrink_seq(examples):
+    length = examples["obs"].shape[-1]
+
+    new_length = length // 2
+
+    max_length = np.max(examples["eval_mask"] * np.arange(0, length)) + 1
+
+    if max_length < new_length:
+        examples["obs"] = examples["obs"][:, :new_length]
+        examples["target"] = examples["target"][:, :new_length]
+        examples["eval_mask"] = examples["eval_mask"][:, :new_length]
+
+        return shrink_seq(examples)
+    else:
+        return examples
+
+
 def sample_batch(examples, bs, zero_example_shape):
     zero_example = {
         "obs": np.zeros_like(zero_example_shape["obs"]),

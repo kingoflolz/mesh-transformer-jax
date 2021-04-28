@@ -1,7 +1,6 @@
 import argparse
 import json
 import time
-import traceback
 
 import numpy as np
 import wandb
@@ -97,8 +96,8 @@ if __name__ == "__main__":
                                         batch_size=(global_val_batch,),
                                         sample_size=seq)
 
-    # run eval for 1024 tokens (unless model has fixed context length)
-    adaptor = EvalHarnessAdaptor(t, 1024 if pe is not "fixed" else seq, global_val_batch * 4)
+    # use dynamic seq length unless pe is fixed
+    adaptor = EvalHarnessAdaptor(t, seq, global_val_batch * 4, shrink=pe != "fixed")
 
     start = time.time()
     t.train(train_dataset.get_samples())
@@ -110,6 +109,8 @@ if __name__ == "__main__":
     print(f"Eval fn compiled in {time.time() - start:.06}s")
 
     wandb.init(project='mesh-transformer-jax', entity="eleutherai", name=params["name"], config=params)
+
+    eval_task_dict = tasks.get_task_dict(eval_tasks)
 
     while True:
         loss, last_loss = t.train(train_dataset.get_samples())
@@ -136,7 +137,7 @@ if __name__ == "__main__":
 
                 wandb.log({f'val/loss_{name}': val_loss}, step)
 
-            results = evaluator.evaluate(adaptor, tasks.get_task_dict(eval_tasks), False, 0, None)
+            results = evaluator.evaluate(adaptor, eval_task_dict, False, 0, None)
 
             flat_results = {}
 

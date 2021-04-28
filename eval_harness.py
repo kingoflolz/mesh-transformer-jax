@@ -41,11 +41,12 @@ if __name__ == "__main__":
     n_vocab = params["n_vocab"]
     seq = 1024  # params["seq"]
     norm = params["norm"]
+    pe = params["pe"]
 
     total_batch = per_replica_batch * tpu_size // cores_per_replica * 4
 
     t = build_model(params, tpu_name, region, preemptible)
-    adaptor = EvalHarnessAdaptor(t, seq, total_batch)
+    adaptor = EvalHarnessAdaptor(t, seq, total_batch, shrink=pe != "fixed")
 
     step, aux = t.load(bucket, model_dir)
     t.move()
