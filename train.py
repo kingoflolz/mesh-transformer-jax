@@ -123,7 +123,11 @@ if __name__ == "__main__":
                    delete_old=step % keep_every != 0)
 
             if step == total_steps:
+                print("training completed!")
                 exit()
+
+        if step % 100 == 0:
+            print(f"step {step} done")
 
         if step % val_every == 0:
             for name, val_set in val_sets.items():
