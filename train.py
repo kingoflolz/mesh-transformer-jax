@@ -10,6 +10,7 @@ from mesh_transformer.build_model import build_model
 from lm_eval import evaluator, tasks
 from tasks.eval_harness import EvalHarnessAdaptor
 from tfrecord_loader import TFRecordNewInputs
+import multiprocessing
 
 
 def parse_args():
@@ -29,6 +30,9 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # huggingface tokenizers gets very angry if you fork
+    multiprocessing.set_start_method("spawn")
+
     args = parse_args()
     params = json.load(open(args.config))
 
@@ -139,7 +143,7 @@ if __name__ == "__main__":
                 val_loss = np.array(val_loss).mean()
                 print(f"validation loss for step {step}, set {name}: {val_loss}")
 
-                wandb.log({f'val/loss_{name}': val_loss}, step)
+                wandb.log({f'val/loss_{name}': float(val_loss)}, step)
 
             results = evaluator.evaluate(adaptor, eval_task_dict, False, 0, None)
 
@@ -147,7 +151,9 @@ if __name__ == "__main__":
 
             for task_name, task_res in results.items():
                 for metric_name, metric_res in task_res.items():
-                    flat_results[f"{task_name}/{metric_name}"] = metric_res
+                    flat_results[f"{task_name}/{metric_name}"] = float(metric_res)
 
+            dumped = json.dumps(results, indent=2)
+            print(f"step {step} val results: {dumped}")
             wandb.log(flat_results, step)
         step += 1

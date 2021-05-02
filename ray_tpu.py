@@ -147,7 +147,7 @@ def start_ray(conn, address):
     for i in glob.glob("mesh_transformer/*.py"):
         conn.put(i, "mesh_transformer/")
 
-    conn.sudo('python3 setup.py install')
+    conn.sudo('python3 setup.py install', hide=True)
 
     conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
     conn.sudo('chmod +x /tmp/ray-tpu.sh', hide=True)
@@ -157,4 +157,6 @@ def start_ray(conn, address):
     except:
         pass
 
-    print(conn.run(f"ray start --address={address} --resources='" + '{"tpu": 1}\''))
+    time.sleep(1)
+
+    conn.run(f"ray start --address={address} --resources='" + '{"tpu": 1}\'', hide=True)

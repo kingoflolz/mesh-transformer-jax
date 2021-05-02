@@ -147,7 +147,7 @@ class TPUCluster:
 
         print(f"Moved weights to TPU in {time.time() - start:.06}s")
 
-    @func_set_timeout(1200)
+    @func_set_timeout(1800)
     def load(self, bucket, path):
         with open(f"gs://{bucket}/{path}/meta.json", "r") as f:
             meta = json.load(f)
