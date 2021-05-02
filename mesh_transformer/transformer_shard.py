@@ -72,7 +72,10 @@ class CausalTransformerShard(hk.Module):
 
         input_len = context.shape[0]
 
-        attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        if self.rpe is not None:
+            attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+        else:
+            attn_bias = 0
 
         x = self.embed(context)
 
@@ -88,8 +91,11 @@ class CausalTransformerShard(hk.Module):
     def generate_once(self, new_tok, state):
         input_len = state[0]["v"].shape[0]
 
-        attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
-        attn_bias = attn_bias[:, -1:, :]
+        if self.rpe is not None:
+            attn_bias = self.rpe(input_len, input_len, self.heads_per_shard, 32)
+            attn_bias = attn_bias[:, -1:, :]
+        else:
+            attn_bias = 0
 
         x = self.embed(new_tok)
 
@@ -227,7 +233,7 @@ class CausalTransformer:
                                                         out_axes=["batch", ...],
                                                         axis_resources={'shard': 'mp', 'batch': 'dp'})
 
-        self.move_xmap = jax.experimental.maps.xmap(fun=lambda x, _: x,
+        self.move_xmap = jax.experimental.maps.xmap(fun=lambda x, _: to_bf16(x),
                                                     in_axes=(["shard", ...], ["batch", ...]),
                                                     out_axes=["shard", ...],
                                                     axis_resources={'shard': 'mp', 'batch': 'dp'})
