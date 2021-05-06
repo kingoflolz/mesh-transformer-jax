@@ -3,7 +3,6 @@ import multiprocessing
 
 import optax
 import ray
-from func_timeout import func_set_timeout
 
 from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
@@ -35,7 +34,7 @@ def build_model(params, tpu_name, region, preemptible):
     head_info = ray.init(include_dashboard=False, object_store_memory=10**9)
     address = head_info['redis_address']
 
-    with multiprocessing.Pool(processes=len(conns)) as p:
+    with multiprocessing.pool.ThreadPool(processes=len(conns)) as p:
         p.map(functools.partial(start_ray, address=address), conns)
 
     opt = optax.chain(
