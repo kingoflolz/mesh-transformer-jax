@@ -26,10 +26,18 @@ def write(x, ckpt_dir):
     # start = time.time()
     idx, i = x
     file_path = ckpt_dir + f"{idx}.npz"
-    with open(file_path, "wb") as f:
-        np.savez(f, *i)
-        # cloudpickle.dump(i, f)
-        # print(f"written {idx} in {time.time() - start:.06}s")
+    for _ in range(3):
+        try:
+            with open(file_path, "wb") as f:
+                np.savez(f, *i)
+                # cloudpickle.dump(i, f)
+                # print(f"written {idx} in {time.time() - start:.06}s")
+            return
+        except:
+            print("save failed, trying again")
+
+    print("save failed 3 times, exiting")
+    raise Exception("save failed")
 
 
 def split(a, n):
