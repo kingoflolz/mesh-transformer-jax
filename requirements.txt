@@ -3,7 +3,6 @@ transformers~=4.4.2
 tqdm~=4.45.0
 setuptools~=51.3.3
 wandb~=0.10.22
-torch~=1.7.1
 einops~=0.3.0
 requests~=2.25.1
 fabric~=2.6.0
@@ -18,3 +17,4 @@ tensorflow-cpu~=2.4.1
 google-cloud-storage~=1.36.2
 smart_open[gcs]
 func_timeout
+ftfy
