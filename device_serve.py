@@ -121,7 +121,7 @@ if __name__ == "__main__":
     ckpt_step = meta["checkpoints"][-1]
     print(f"using checkpoint {ckpt_step}")
 
-    total_batch = per_replica_batch * jax.device_count() // cores_per_replica
+    total_batch = per_replica_batch * jax.device_count() // cores_per_replica * 8
     with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
         network = CausalTransformer(params)
 
@@ -172,7 +172,7 @@ if __name__ == "__main__":
 
             output = network.generate(np.array(all_tokenized),
                                       np.array(all_length),
-                                      512,
+                                      256,
                                       {
                                           "top_p": np.array(all_top_p),
                                           "temp": np.array(all_temp)
