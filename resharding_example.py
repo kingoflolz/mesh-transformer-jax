@@ -48,6 +48,9 @@ start = time.time()
 # here we load a checkpoint which was written with 8 shards into 1 shard
 network.state = read_ckpt(network.state, "step_383500/", 8, shards_out=cores_per_replica)
 
+# move the state to CPU/system memory so it's not duplicated by xmap
+network.state = jax.device_put(network.state, jax.devices("cpu")[0])
+
 def infer(context, top_p=0.9, temp=1.0, gen_len=512):
     tokens = tokenizer.encode(context)
 
