@@ -20,7 +20,7 @@ params = {
   "norm": "layernorm",
   "pe": "rotary",
   "pe_rotary_dims": 64,
-
+  "early_cast": True,
   "seq": 2048,
   "cores_per_replica": 1,  # only running on one GPU
   "per_replica_batch": 1,
