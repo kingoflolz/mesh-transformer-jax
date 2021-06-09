@@ -171,7 +171,7 @@ class CausalTransformer:
             params = param_init_fn(key, x, x)
 
             return {
-                "params": to_f32(params),
+                "params": ("early_cast" in config and to_bf16 or to_f32)(params),
                 "step": np.array(0),
                 "opt_state": optimizer.init(params)
             }
@@ -232,11 +232,6 @@ class CausalTransformer:
                                                                  ["batch", ...]),
                                                         out_axes=["batch", ...],
                                                         axis_resources={'shard': 'mp', 'batch': 'dp'})
-
-        self.move_xmap = jax.experimental.maps.xmap(fun=lambda x, _: to_bf16(x),
-                                                    in_axes=(["shard", ...], ["batch", ...]),
-                                                    out_axes=["shard", ...],
-                                                    axis_resources={'shard': 'mp', 'batch': 'dp'})
 
         key = hk.PRNGSequence(42)
 
