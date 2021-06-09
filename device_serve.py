@@ -162,13 +162,23 @@ if __name__ == "__main__":
             all_tokenized = []
             all_length = []
             for ctx in all_ctx:
-                tokens = tokenizer.encode(ctx)
-                provided_ctx = len(tokens)
-                pad_amount = seq - provided_ctx
+                padded_tokens = np.zeros(seq).astype(np.uint32)
+                length = 0
 
-                padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)[-seq:]
+                try:
+                    tokens = tokenizer.encode(ctx)
+                    provided_ctx = len(tokens)
+                    pad_amount = seq - provided_ctx
+
+                    pad_amount = max(pad_amount, 0)
+
+                    padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)[-seq:]
+                    length = len(tokens)
+                except:
+                    print("oops exception")
+
                 all_tokenized.append(padded_tokens)
-                all_length.append(len(tokens))
+                all_length.append(length)
 
             output = network.generate(np.array(all_tokenized),
                                       np.array(all_length),
