@@ -26,7 +26,7 @@ A 6 billion parameter, autoregressive text generation model trained on [The Pile
 
 [Colab demo](http://colab.research.google.com/github/kingoflolz/mesh-transformer-jax/blob/master/colab_demo.ipynb)
 
-[Web demo](http://colab.research.google.com/github/kingoflolz/mesh-transformer-jax/blob/master/colab_demo.ipynb)
+[Web demo](https://6b.eleuther.ai/)
 
 [Aran's blog post](https://arankomatsuzaki.wordpress.com/2021/06/04/gpt-j/)
 
