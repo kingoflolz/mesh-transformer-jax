@@ -171,7 +171,7 @@ class CausalTransformer:
             params = param_init_fn(key, x, x)
 
             return {
-                "params": to_f32(params),
+                "params": ("early_cast" in config and to_bf16 or to_f32)(params),
                 "step": np.array(0),
                 "opt_state": optimizer.init(params)
             }

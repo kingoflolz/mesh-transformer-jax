@@ -20,7 +20,7 @@ params = {
   "norm": "layernorm",
   "pe": "rotary",
   "pe_rotary_dims": 64,
-
+  "early_cast": True,
   "seq": 2048,
   "cores_per_replica": 1,  # only running on one GPU
   "per_replica_batch": 1,
@@ -47,9 +47,6 @@ start = time.time()
 
 # here we load a checkpoint which was written with 8 shards into 1 shard
 network.state = read_ckpt(network.state, "step_383500/", 8, shards_out=cores_per_replica)
-
-network.state = network.move_xmap(network.state, np.zeros(cores_per_replica))
-
 
 def infer(context, top_p=0.9, temp=1.0, gen_len=512):
     tokens = tokenizer.encode(context)
