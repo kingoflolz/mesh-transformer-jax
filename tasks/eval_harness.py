@@ -7,6 +7,7 @@ import numpy as np
 
 from tasks.util import sample_batch, shrink_seq
 import multiprocessing
+import ftfy
 
 tokenizer = None
 
@@ -14,6 +15,7 @@ tokenizer = None
 def process_init():
     global tokenizer
     tokenizer = transformers.GPT2TokenizerFast.from_pretrained('gpt2')
+    tokenizer.model_max_length = int(1e30)
     tokenizer.pad_token = "<|endoftext|>"
 
     assert tokenizer.encode('hello\n\nhello') == [31373, 198, 198, 31373]
@@ -24,8 +26,8 @@ def process_request(x, seq):
 
     ctx, cont = x
 
-    ctx_tokens = tokenizer.encode("<|endoftext|>" + ctx)
-    cont_tokens = tokenizer.encode(cont)
+    ctx_tokens = tokenizer.encode("<|endoftext|>" + ftfy.fix_text(ctx, normalization="NFKC"))
+    cont_tokens = tokenizer.encode(ftfy.fix_text(cont, normalization="NFKC"))
 
     all_tokens = ctx_tokens + cont_tokens
     all_tokens = np.array(all_tokens)[-seq:]  # truncate sequence at seq length
@@ -48,7 +50,11 @@ class EvalHarnessAdaptor(LM):
     def greedy_until(self, requests):
         raise Exception("unimplemented")
 
+    def loglikelihood_rolling(self, requests):
+        raise Exception("unimplemented")
+
     def __init__(self, tpu_cluster, seq, batch, shrink):
+        super().__init__()
         self.tpu = tpu_cluster
         self.seq = seq
         self.batch = batch

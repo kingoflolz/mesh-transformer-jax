@@ -39,7 +39,7 @@ if __name__ == "__main__":
     d_model = params["d_model"]
     n_heads = params["n_heads"]
     n_vocab = params["n_vocab"]
-    seq = 1024  # params["seq"]
+    seq = params["seq"]
     norm = params["norm"]
     pe = params["pe"]
 
