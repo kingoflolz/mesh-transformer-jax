@@ -40,9 +40,9 @@ def nucleaus_filter(logits, top_p=0.9, top_k=None):
 
 
 def nucleaus_sample(key, logits, _, top_p=0.9, temp=1, top_k=None):
-    logits = nucleaus_filter(logits, top_p)
+    logits = nucleaus_filter(logits, top_p, top_k=top_k)
 
-    return softmax_sample(key, logits, None, temp=temp, top_k=top_k)
+    return softmax_sample(key, logits, None, temp=temp)
 
 
 if __name__ == "__main__":
