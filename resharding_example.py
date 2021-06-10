@@ -1,4 +1,5 @@
-# This was tested with an A100, and peak memory usage is approximately 30GB when loading the model
+# This was tested with an RTX 3090, peak memory usage is approximately 22.4GB during inference, and 19GB when loading the model
+# The following environment variables were also used: XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
 
 import time
 
@@ -47,6 +48,9 @@ start = time.time()
 
 # here we load a checkpoint which was written with 8 shards into 1 shard
 network.state = read_ckpt(network.state, "step_383500/", 8, shards_out=cores_per_replica)
+
+# move the state to CPU/system memory so it's not duplicated by xmap
+network.state = jax.device_put(network.state, jax.devices("cpu")[0])
 
 def infer(context, top_p=0.9, temp=1.0, gen_len=512):
     tokens = tokenizer.encode(context)
