@@ -1,4 +1,5 @@
-# This was tested with an A100, and peak memory usage is approximately 30GB when loading the model
+# This was tested with an RTX 3090, peak memory usage is approximately 22.4GB during inference, and 19GB when loading the model
+# The following environment variables were also used: XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_ALLOCATOR=platform
 
 import time
 
