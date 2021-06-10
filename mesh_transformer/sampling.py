@@ -10,6 +10,7 @@ def softmax_sample(key, logits, _, temp=1):
 def nucleaus_filter(logits, top_p=0.9, top_k=None):
     sorted_logits = jnp.sort(logits)[:, ::-1] # sort descending
     sorted_indices = jnp.argsort(logits)[:, ::-1]
+    cumulative_probs = jnp.cumsum(jax.nn.softmax(sorted_logits), axis=-1)
 
     if top_k is not None:
         # Keep only top_k tokens
@@ -23,8 +24,6 @@ def nucleaus_filter(logits, top_p=0.9, top_k=None):
         logit_mask = 1e10 * indices_to_remove
 
         logits -= logit_mask
-
-    cumulative_probs = jnp.cumsum(jax.nn.softmax(sorted_logits), axis=-1)
 
     # Remove tokens with cumulative probability above a threshold
     sorted_indices_to_remove = cumulative_probs > top_p
