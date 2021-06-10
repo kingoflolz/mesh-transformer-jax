@@ -52,7 +52,7 @@ network.state = read_ckpt(network.state, "step_383500/", 8, shards_out=cores_per
 # move the state to CPU/system memory so it's not duplicated by xmap
 network.state = jax.device_put(network.state, jax.devices("cpu")[0])
 
-def infer(context, top_p=0.9, temp=1.0, gen_len=512):
+def infer(context, top_k=40, top_p=0.9, temp=1.0, gen_len=512):
     tokens = tokenizer.encode(context)
 
     provided_ctx = len(tokens)
@@ -63,7 +63,7 @@ def infer(context, top_p=0.9, temp=1.0, gen_len=512):
     length = np.ones(per_replica_batch, dtype=np.uint32) * len(tokens)
 
     start = time.time()
-    output = network.generate(batched_tokens, length, gen_len, {"top_p": np.ones(per_replica_batch) * top_p, "temp": np.ones(per_replica_batch) * temp})
+    output = network.generate(batched_tokens, length, gen_len, {"top_k": np.ones(per_replica_batch, dtype=np.int32) * top_k, "top_p": np.ones(per_replica_batch) * top_p, "temp": np.ones(per_replica_batch) * temp})
 
     samples = []
     decoded_tokens = output[1][0]
