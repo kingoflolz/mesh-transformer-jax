@@ -63,7 +63,7 @@ def infer(context, top_k=40, top_p=0.9, temp=1.0, gen_len=512):
     length = np.ones(per_replica_batch, dtype=np.uint32) * len(tokens)
 
     start = time.time()
-    output = network.generate(batched_tokens, length, gen_len, {"top_k": np.ones(per_replica_batch, dtype=np.int32) * top_k, "top_p": np.ones(per_replica_batch) * top_p, "temp": np.ones(per_replica_batch) * temp})
+    output = network.generate(batched_tokens, length, gen_len, {"top_p": np.ones(per_replica_batch) * top_p, "top_k": top_k is not None and (np.ones(per_replica_batch, dtype=np.int32) * top_k) or None, "temp": np.ones(per_replica_batch) * temp})
 
     samples = []
     decoded_tokens = output[1][0]
