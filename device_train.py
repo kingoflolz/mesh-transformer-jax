@@ -150,7 +150,6 @@ if __name__ == "__main__":
     lr = params["lr"]
     end_lr = params["end_lr"]
     weight_decay = params["weight_decay"]
-    step_shift = params.get("step_shift", 0)
 
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
@@ -158,7 +157,7 @@ if __name__ == "__main__":
         optax.scale_by_adam(),
         additive_weight_decay(weight_decay),
         optax.scale(-1),
-        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr, step_shift))
+        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))
     )
 
     params["optimizer"] = opt
