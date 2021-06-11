@@ -25,13 +25,14 @@ def parse_args():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None, help="Config file location")
-    parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
+    parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune - if provided, should be a path to a specific checkpoint, ending in step_XXX")
 
     args = parser.parse_args()
     return args
 
 
 def save(step, bucket, path, mp, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
+    """this is mostly a copy-paste of TPUCluster.save"""
     assert path
     client = storage.Client()
 
