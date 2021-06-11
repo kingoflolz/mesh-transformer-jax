@@ -11,6 +11,10 @@ class TFRecordLoader:
             self.file_idx = restore_state["file_idx"]
             self.file_idx_init = False
             self.used = restore_state["used"]
+
+            unique = set(self.used)
+            last_pass_start_idx = len(self.used) % len(unique)
+            self.used = self.used[-last_pass_start_idx:]
         else:
             self.file_idx = 0
             self.file_idx_init = True
@@ -27,6 +31,14 @@ class TFRecordLoader:
         else:
             self.map_fn = lambda x: x
 
+        self.sample_fn = self.sample_once()
+
+    def reset(self):
+        self.file_idx = 0
+        self.file_idx_init = True
+        self.used = []
+
+        self.clean_index = list(filter(lambda x: x not in self.used, self.index))
         self.sample_fn = self.sample_once()
 
     def sample_once(self):
