@@ -237,9 +237,6 @@ if __name__ == "__main__":
             network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1])
             print(f"network loaded in {time.time() - start:.06}s")
 
-        local_shards = max(jax.local_device_count() // mesh_shape[1], 1)
-        network.state = network.move_xmap(network.state, np.zeros(local_shards))
-
         print('compiling train fn')
         start = time.time()
         train_step(network, train_dataset.get_samples())
