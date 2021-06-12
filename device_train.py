@@ -31,7 +31,7 @@ def parse_args():
     return args
 
 
-def save(step, bucket, path, mp, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
+def save(network, step, bucket, path, mp, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
     """this is mostly a copy-paste of TPUCluster.save"""
     assert path
     client = storage.Client()
@@ -58,7 +58,7 @@ def save(step, bucket, path, mp, aux=None, init=False, overwrite=False, keep_n=3
     start = time.time()
     res = []
     for shard_id in range(mp):
-        write_ckpt(f"gs://{bucket}/{path}/step_{step}/", shard_id)
+        write_ckpt(network, f"gs://{bucket}/{path}/step_{step}/", shard_id)
 
     print(f"Wrote checkpoint in {time.time() - start:.06}s")
 
@@ -255,10 +255,10 @@ if __name__ == "__main__":
         while True:
             if (step % ckpt_every == 0 and step) or step == total_steps:
                 print(f"saving a checkpoint for step {step}")
-                save(step, bucket, model_dir,
+                save(network, step, bucket, model_dir,
                      mp=cores_per_replica,
                      aux={"train_loader": train_dataset.get_state()},
-                     init=(step == 0),
+                     init=(step == 1),
                      delete_old=True,
                      )
 
