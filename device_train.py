@@ -189,7 +189,7 @@ if __name__ == "__main__":
             print(f"state will be restored from checkpoint {ckpt_step}")
 
             step = ckpt_step
-            train_loader = meta['aux'].get("train_loader", None)
+            train_loader = meta['aux'][str(ckpt_step)].get("train_loader", None)
         except NotFound:
             # no checkpoint, start at zero
             print(f"No checkpoint to load at {initial_ckpt_path}. Training from scratch.")
