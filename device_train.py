@@ -25,27 +25,23 @@ def parse_args():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None, help="Config file location")
-    parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune - if provided, should be a path to a specific checkpoint, ending in step_XXX")
+    parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
 
     args = parser.parse_args()
     return args
 
 
-def save(network, step, bucket, path, mp, aux=None, init=False, overwrite=False, keep_n=3, delete_old=True):
-    """this is mostly a copy-paste of TPUCluster.save"""
+def save(network, step, bucket, path, mp, aux=None, keep_n=3, delete_old=True):
     assert path
     client = storage.Client()
 
     if aux is None:
         aux = {}
 
-    if init:
-        # check existing checkpoint folder does not exist, and delete it if it does
-        for blob in client.list_blobs(bucket, prefix=f"{path}/"):
-            assert overwrite
-            assert path in blob.name
-            blob.delete()
-
+    try:
+        with open(f"gs://{bucket}/{path}/meta.json", "r") as f:
+            meta = json.load(f)
+    except:
         # create metadata file
         with open(f"gs://{bucket}/{path}/meta.json", "w") as f:
             json.dump({
@@ -150,6 +146,7 @@ if __name__ == "__main__":
     lr = params["lr"]
     end_lr = params["end_lr"]
     weight_decay = params["weight_decay"]
+    step_shift = params.get("step_shift", 0)
 
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
@@ -157,7 +154,7 @@ if __name__ == "__main__":
         optax.scale_by_adam(),
         additive_weight_decay(weight_decay),
         optax.scale(-1),
-        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))
+        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr, step_shift))
     )
 
     params["optimizer"] = opt
@@ -223,8 +220,8 @@ if __name__ == "__main__":
                                         sample_size=seq)
 
     # tok/sec metrics
-    sequences_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
-    tokens_per_step = params['seq'] * sequences_per_step
+    windows_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
+    tokens_per_step = params['seq'] * windows_per_step
 
     # load + run
     with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
@@ -258,7 +255,6 @@ if __name__ == "__main__":
                 save(network, step, bucket, model_dir,
                      mp=cores_per_replica,
                      aux={"train_loader": train_dataset.get_state()},
-                     init=(step == 1),
                      delete_old=True,
                      )
 
