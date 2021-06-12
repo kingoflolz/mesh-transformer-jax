@@ -223,8 +223,8 @@ if __name__ == "__main__":
                                         sample_size=seq)
 
     # tok/sec metrics
-    windows_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
-    tokens_per_step = params['seq'] * windows_per_step
+    sequences_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
+    tokens_per_step = params['seq'] * sequences_per_step
 
     # load + run
     with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
