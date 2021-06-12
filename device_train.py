@@ -58,7 +58,7 @@ def save(network, step, bucket, path, mp, aux=None, init=False, overwrite=False,
     start = time.time()
     res = []
     for shard_id in range(mp):
-        write_ckpt(network, f"gs://{bucket}/{path}/step_{step}/", shard_id)
+        write_ckpt(network.state, f"gs://{bucket}/{path}/step_{step}/", shard_id)
 
     print(f"Wrote checkpoint in {time.time() - start:.06}s")
 
