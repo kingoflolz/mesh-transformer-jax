@@ -250,7 +250,7 @@ if __name__ == "__main__":
         wandb.init(project='mesh-transformer-jax', name=params["name"], config=params)
 
         while True:
-            if (step % ckpt_every == 0 and step) or step == total_steps:
+            if (step % ckpt_every == 1) or step == total_steps:
                 print(f"saving a checkpoint for step {step}")
                 save(network, step, bucket, model_dir,
                      mp=cores_per_replica,
