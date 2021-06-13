@@ -161,6 +161,9 @@ if __name__ == "__main__":
 
     start = time.time()
     tpu_size = jax.device_count()
+    if tpu_size < cores_per_replica:
+        msg = f"each shard needs a separate device, but device count ({tpu_size}) < shard count ({cores_per_replica})"
+        raise ValueError(msg)
     print(f"jax devices: {tpu_size}")
     print(f"jax runtime initialized in {time.time() - start:.06}s")
 
