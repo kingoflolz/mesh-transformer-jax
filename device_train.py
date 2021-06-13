@@ -160,10 +160,11 @@ if __name__ == "__main__":
     params["optimizer"] = opt
 
     start = time.time()
-    print(f"jax devices: {jax.device_count()}")
+    tpu_size = jax.device_count()
+    print(f"jax devices: {tpu_size}")
     print(f"jax runtime initialized in {time.time() - start:.06}s")
 
-    mesh_shape = (jax.device_count() // cores_per_replica, cores_per_replica)
+    mesh_shape = (tpu_size // cores_per_replica, cores_per_replica)
     devices = np.array(jax.devices()).reshape(mesh_shape)
 
     # pick initial ckpt - based on tuning vs train from scratch
@@ -201,7 +202,6 @@ if __name__ == "__main__":
 
     # set up datasets
     print("setting up datasets")
-    tpu_size = jax.device_count()
 
     train_dataset = TFRecordNewInputs(f"data/{params['train_set']}",
                                       batch_size=(
