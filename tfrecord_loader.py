@@ -29,6 +29,14 @@ class TFRecordLoader:
 
         self.sample_fn = self.sample_once()
 
+    def reset(self):
+        self.file_idx = 0
+        self.file_idx_init = True
+        self.used = []
+
+        self.clean_index = list(filter(lambda x: x not in self.used, self.index))
+        self.sample_fn = self.sample_once()
+
     def sample_once(self):
         for i in self.clean_index:
             compression = "ZLIB" if "zstd" in i else ""
@@ -56,7 +64,7 @@ class TFRecordLoader:
         try:
             return next(self.sample_fn)
         except StopIteration:
-            self.sample_fn = self.sample_once()
+            self.reset()
             return self.get_samples()
 
     def get_state(self):
