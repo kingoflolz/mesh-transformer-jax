@@ -23,7 +23,11 @@ from mesh_transformer.util import clip_by_global_norm, additive_weight_decay
 
 def parse_args():
     # Parse command line arguments
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="""
+    To use, download the full checkpoint archive, extract and upload to a GCS bucket
+    Modify the config file to point at the saved checkpoint, as well as the data
+    Check tfrecord_loader for the expected data format
+    """)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
 
