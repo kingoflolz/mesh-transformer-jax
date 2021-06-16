@@ -11,13 +11,15 @@ from mesh_transformer.checkpoint import read_ckpt, write_ckpt
 from mesh_transformer.transformer_shard import CausalTransformer
 from smart_open import open
 
-from mesh_transformer.util import clip_by_global_norm, to_bf16
+from mesh_transformer.util import clip_by_global_norm, to_bf16, to_f16
 
 
 def parse_args():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None, help="Config file location")
+    parser.add_argument("--ckpt-step", type=int, default=-1, help="Step number of the checkpoint to convert (if not specified, converts the most recent checkpoint)")
+    parser.add_argument("--f16", default=False, action="store_true", help="Convert to float16 (instead of bfloat16)")
 
     args = parser.parse_args()
     return args
@@ -26,6 +28,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     params = json.load(open(args.config))
+    convert_fn = to_f16 if args.f16 else to_bf16
 
     cores_per_replica = params["cores_per_replica"]
 
@@ -53,7 +56,10 @@ if __name__ == "__main__":
     with open(f"gs://{bucket}/{model_dir}/meta.json", "r") as f:
         meta = json.load(f)
 
-    ckpt_step = meta["checkpoints"][-1]
+    if args.ckpt_step > -1:
+        ckpt_step = args.ckpt_step
+    else:
+        ckpt_step = meta["checkpoints"][-1]
     print(f"using checkpoint {ckpt_step}")
 
     with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
@@ -66,9 +72,11 @@ if __name__ == "__main__":
         start = time.time()
         del network.state["opt_state"]
 
-        network.state["params"] = to_bf16(network.state["params"])
+        network.state["params"] = convert_fn(network.state["params"])
         print(f"network converted in {time.time() - start:.06}s")
 
+        suffix = "_slim_f16" if args.f16 else "_slim"
+
         for i in range(cores_per_replica):
-            write_ckpt(network.state, f"gs://{bucket}/{model_dir}_slim/step_{ckpt_step}/", i)
+            write_ckpt(network.state, f"gs://{bucket}/{model_dir}{suffix}/step_{ckpt_step}/", i)
             print(f"written shard {i}")
