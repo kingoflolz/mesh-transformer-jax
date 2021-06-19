@@ -3,10 +3,10 @@
 A haiku library using the `xmap` operator in Jax for model parallelism of transformers.
 
 The parallelism scheme is similar to the [original Megatron-LM](https://arxiv.org/abs/1909.08053), which is efficient
-on TPUs due to the high speed 2d mesh network. 
+on TPUs due to the high speed 2d mesh network.
 
 This library is designed for scalability up to approximately 20B parameters on TPUv3s, beyond which different
-parallelism strategies should be used. See other implementations such as 
+parallelism strategies should be used. See other implementations such as
 [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) or [DeepSpeed](https://github.com/microsoft/DeepSpeed) for that.
 
 One future direction for research is integrating this codebase with
@@ -50,7 +50,7 @@ The weights of GPT-J-6B are licensed under version 2.0 of the Apache License.
 
 ### Model Details
 
-| Hyperparameter    | Value  | 
+| Hyperparameter    | Value  |
 |-------------------|--------|
 | n_parameters      | 6,053,381,344 |
 | n_layers          | 28*    |
@@ -128,6 +128,12 @@ expect to be run directly on a TPUVM.
 Furthermore, there is an example (`resharding_example.py`) of how to convert the provided checkpoints (which have 8
 shards in the case of GPT-J-6B) down to a smaller number, such as for when running on GPU(s).
 
+### Fine-tuning
+
+To fine-tune the model, run `device_train.py` on a TPU VM.  If you use a TPU v8-3, you can fine-tune at a rate of ~5000 tokens/second, which should be sufficient for small-to-medium-size datasets.
+
+For usage information, run `python3 device_train.py --help`.
+
 # Citation
 
 To cite this repository:
@@ -152,7 +158,7 @@ To cite the weights of GPT-J-6B:
 }
 ```
 
-If you use this repository or any of the pretrained weights to do something cool, we would love to hear about it. 
+If you use this repository or any of the pretrained weights to do something cool, we would love to hear about it.
 Feel free to open a github issue or reach out over email (in profile).
 
 # TODO
