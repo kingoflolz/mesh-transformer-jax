@@ -34,7 +34,8 @@ def parse_args():
     To prepare data in the expected data format:
         - use this notebook: https://github.com/EleutherAI/gpt-neo/blob/master/GPTNeo_example_notebook.ipynb
         - after creating .tfrecords files, save their paths to a index file under `data/`, see existing files for examples
-    """)
+    """,
+    formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
 
