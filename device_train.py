@@ -25,9 +25,17 @@ def parse_args():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="""
     To use, download the full checkpoint archive, extract and upload to a GCS bucket, and set that as --tune-model-path
-    Modify the config file to point to where the checkpoints should be written during training, as well as the data
-    Check tfrecord_loader for the expected data format
-    """)
+    Modify the config file:
+        - set `model_dir` to where the checkpoints should be written during training
+        - set `train_set`, `val_set` to index files for your data
+        - set `tpu_size` to 8 (if on a v3-8)
+        - set `warmup_steps`, `anneal_steps`, `lr`, `end_lr` to the lr schedule for your finetuning run
+        - the global step will reset to 0, keep that in mind when writing your lr schedule
+    To prepare data in the expected data format:
+        - use this notebook: https://github.com/EleutherAI/gpt-neo/blob/master/GPTNeo_example_notebook.ipynb
+        - after creating .tfrecords files, save their paths to a index file under `data/`, see existing files for examples
+    """,
+    formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
 
@@ -180,10 +188,12 @@ if __name__ == "__main__":
     train_loader = None
 
     if args.tune_model_path:
+        print('`--tune_model_path` passed: we are beginning a fine-tuning run')
+        fine_tuning = True
         initial_ckpt_state_path = args.tune_model_path
-        print('we are fine-tuning')
     else:
-        print('we are not fine-tuning')
+        print('`--tune_model_path` not passed: we are continuing a fine-tuning run from a checkpoint (or we are not fine-tuning)')
+        fine_tuning = False
         initial_ckpt_model_dir = model_dir
         initial_ckpt_path = f"gs://{bucket}/{initial_ckpt_model_dir}"
         meta_path = f"{initial_ckpt_path}/meta.json"
@@ -236,8 +246,19 @@ if __name__ == "__main__":
 
         if initial_ckpt_state_path:
             print("loading network")
+            if fine_tuning:
+                # get the scheduler step stored in the just-initialized optimizer
+                # should be zero
+                init_sched_state = network.state["opt_state"][-1]
+
             start = time.time()
             network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1])
+
+            if fine_tuning:
+                # overwrite the loaded scheduler step with zeros
+                # this makes fine-tuning use the lr schedule in
+                network.state["opt_state"][-1] = init_sched_state
+
             print(f"network loaded in {time.time() - start:.06}s")
 
         print('compiling train fn')
