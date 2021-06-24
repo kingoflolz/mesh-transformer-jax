@@ -38,6 +38,7 @@ def parse_args():
     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
+    parser.add_argument("--fresh-opt", default=False, action="store_true", help="Use a newly initialized optimizer, ignoring any optimizer state saved in the base checkpoint")
 
     args = parser.parse_args()
     return args
@@ -252,7 +253,7 @@ if __name__ == "__main__":
                 init_sched_state = network.state["opt_state"][-1]
 
             start = time.time()
-            network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1])
+            network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1], load_opt=(not args.fresh_opt))
 
             if fine_tuning:
                 # overwrite the loaded scheduler step with zeros
