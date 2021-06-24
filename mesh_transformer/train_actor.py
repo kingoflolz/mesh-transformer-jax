@@ -19,7 +19,6 @@ class NetworkRunner(object):
         from jax.experimental.maps import thread_resources, ResourceEnv, Mesh
         import haiku as hk
         from mesh_transformer.checkpoint import write_ckpt, read_ckpt
-        from mesh_transformer.transformer_shard import CausalTransformer
         # jax.experimental.maps.EXPERIMENTAL_SPMD_LOWERING = True
 
         thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
@@ -32,7 +31,7 @@ class NetworkRunner(object):
 
         with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
             start = time.time()
-            network: CausalTransformer = self.network_builder()
+            network = self.network_builder()
             param_count = hk.data_structures.tree_size(network.state['params'])
             print(f"Initialized in {time.time() - start:.06}s")
             print(f"Total parameters: {param_count}")

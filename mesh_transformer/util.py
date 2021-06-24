@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from optax._src.transform import OptState, GradientTransformation, AdditiveWeightDecayState
-
+import numpy as np
 
 def gpt3_schedule(warmup_steps,
                   total_steps,
@@ -134,6 +134,32 @@ def g_psum_bwd(_, g):
 
 
 g_psum.defvjp(g_psum_fwd, g_psum_bwd)
+
+
+def shard_axis(x, axis_size, axis_name):
+    # in_shape = x.shape
+    assert x.shape[0] % axis_size == 0
+
+    x = x.reshape((axis_size, -1) + x.shape[1:])
+
+    x = x[jax.lax.axis_index(axis_name)]
+    # print("shard out", x.shape, "in", in_shape)
+
+    # assert np.prod(x.shape) * axis_size == np.prod(in_shape)
+
+    return x
+
+
+def unshard_axis(x, axis_name):
+    # in_shape = x.shape
+    x = jax.lax.all_gather(x, axis_name)
+
+    x = x.reshape((-1, ) + x.shape[2:])
+
+    # assert x.shape[-1] == 4096
+    # print("unshard out", x.shape, "in", in_shape)
+    return x
+
 
 if __name__ == "__main__":
     sch = gpt3_schedule(1_000, 20_000, 1e-4, 1e-5)

@@ -6,12 +6,12 @@ import ray
 
 from mesh_transformer import util
 from mesh_transformer.TPU_cluster import TPUCluster
-from mesh_transformer.transformer_shard import CausalTransformer
+from mesh_transformer.transformer_shard import CausalTransformer, CausalTransformerV2
 from mesh_transformer.util import clip_by_global_norm, additive_weight_decay
 from ray_tpu import create_tpu, wait_til, get_connection, start_ray
 
 
-def build_model(params, tpu_name, region, preemptible):
+def build_model(params, tpu_name, region, preemptible, version=1):
     gradient_accumulation_steps = params.get("gradient_accumulation_steps", 1)
     cores_per_replica = params["cores_per_replica"]
     tpu_size = params["tpu_size"]
@@ -48,7 +48,12 @@ def build_model(params, tpu_name, region, preemptible):
 
     params["optimizer"] = opt
 
-    model_fn = functools.partial(CausalTransformer, params)
+    if version == 2:
+        model_fn = functools.partial(CausalTransformerV2, params)
+    elif version == 1:
+        model_fn = functools.partial(CausalTransformer, params)
+    else:
+        raise Exception(f"Version {version} does not exist")
 
     t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn)
     return t

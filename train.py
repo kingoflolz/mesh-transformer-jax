@@ -25,6 +25,8 @@ def parse_args():
     parser.add_argument("--new", action="store_true", help="If set, deletes previous checkpoint, if it exists, and "
                                                            "starts a new training run")
 
+    parser.add_argument("--version", type=int, default=1, help="Choose which model version to use")
+
     args = parser.parse_args()
     return args
 
@@ -70,10 +72,10 @@ if __name__ == "__main__":
     pe = params["pe"]
     assert pe in ["fixed", "rotary", "t5"]
 
-    t = build_model(params, tpu_name, region, preemptible)
+    t = build_model(params, tpu_name, region, preemptible, version=args.version)
 
     try:
-        t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
+        # t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
         step = 0
         train_load_restore = None
     except Exception as e:
