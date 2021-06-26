@@ -118,11 +118,13 @@ def reshard(x, old_shape):
     return out
 
 
-def read_ckpt(pytree, dir, shards_in, shards_out=None):
+def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
     if shards_out is None:
         shards_out = shards_in
 
     old_flattened, structure = jax.tree_flatten(pytree)
+
+    original_opt_state = pytree["opt_state"]
 
     # TODO: figure out how to use a process pool here for more speed
     with multiprocessing.pool.ThreadPool(shards_in) as p:
@@ -144,4 +146,8 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None):
 
             assert x.shape == old.shape, f"Incompatible checkpoints {x.shape} vs {old.shape}"
 
-    return jax.tree_unflatten(structure, unsharded)
+    loaded_pytree = jax.tree_unflatten(structure, unsharded)
+
+    if not load_opt:
+        loaded_pytree['opt_state'] = original_opt_state
+    return loaded_pytree

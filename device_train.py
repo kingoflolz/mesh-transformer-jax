@@ -38,6 +38,7 @@ def parse_args():
     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
+    parser.add_argument("--fresh-opt", default=False, action="store_true", help="Use a newly initialized optimizer, ignoring any optimizer state saved in the base checkpoint")
 
     args = parser.parse_args()
     return args
@@ -252,7 +253,7 @@ if __name__ == "__main__":
                 init_sched_state = network.state["opt_state"][-1]
 
             start = time.time()
-            network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1])
+            network.state = read_ckpt(network.state, initial_ckpt_state_path, devices.shape[1], load_opt=(not args.fresh_opt))
 
             if fine_tuning:
                 # overwrite the loaded scheduler step with zeros
@@ -285,10 +286,6 @@ if __name__ == "__main__":
                      delete_old=True,
                      )
 
-                if step == total_steps:
-                    print("training completed!")
-                    exit()
-
             if step % val_every == 1:  # 1 because we've already taken a step to compile train fn
                 for name, val_set in val_sets.items():
                     val_loss = []
@@ -302,6 +299,10 @@ if __name__ == "__main__":
                     print(f"validation loss for step {step}, set {name}: {val_loss}")
 
                     wandb.log({f'val/loss_{name}': float(val_loss)}, step)
+
+            if step == total_steps:
+                print("training completed!")
+                exit()
 
             start = time.time()
             loss, last_loss = train_step(network, train_dataset.get_samples())
