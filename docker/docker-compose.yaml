@@ -1,0 +1,31 @@
+version: "3.3"
+services:
+    gptjserver:
+        image: gptjserver
+        container_name: gptjserver
+        cap_add:
+            - ALL
+        environment:
+            - TPU_NAME=${TPU_NAME}
+            - TF_CPP_MIN_LOG_LEVEL=0
+            - XRT_TPU_CONFIG="localservice;0;localhost:51011"
+            - TF_XLA_FLAGS=--tf_xla_enable_xla_devices
+        build:
+            context: .
+            dockerfile: Dockerfile
+        ports:
+            - 8080:80
+        volumes:
+            - ${MODEL_DIR}:/app/model
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /usr/share/tpu/:/usr/share/tpu/
+            - /lib/libtpu.so:/lib/libtpu.so
+        privileged: true
+        restart: unless-stopped
+        devices:
+            - "/dev:/dev"
+        networks:
+            - production
+networks:
+    production:
+            
