@@ -1,5 +1,5 @@
 numpy~=1.19.5
-transformers~=4.4.2
+transformers~=4.8.2
 tqdm~=4.45.0
 setuptools~=51.3.3
 wandb~=0.10.22
