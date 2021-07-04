@@ -18,3 +18,4 @@ google-cloud-storage~=1.36.2
 smart_open[gcs]
 func_timeout
 ftfy
+uvicorn
