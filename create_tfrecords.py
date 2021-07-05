@@ -7,11 +7,8 @@ import tensorflow as tf
 from lm_dataformat import Reader
 from transformers import GPT2TokenizerFast
 from tqdm import tqdm
-import logging
 import re
 import numpy as np
-
-logging.getLogger("transformers").setLevel(logging.ERROR)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input_dir", type=str, help="Path to where your files are located.")
@@ -86,6 +83,15 @@ def write_to_file(writer, data):
     writer.write(tf_example.SerializeToString())
 
 
+def write_tfrecord(files, fp):
+    chunks = files
+    files_per = len(files)
+
+    with tf.io.TFRecordWriter(fp) as writer:
+        for f in files:
+            write_to_file(writer, f)
+
+
 def split_list(l, n):
     # splits list/string into n size chunks
     return [l[i:i + n] for i in range(0, len(l), n)]
@@ -113,17 +119,6 @@ def archive_to_tokens(f, encoder, args, prefix=[]):
         prefix = []
 
 
-def write_tfrecord(files, output_dir, out_name):
-    chunks = files
-    files_per = len(files)
-
-    fp = os.path.join(output_dir, f"{out_name}.tfrecords")
-
-    with tf.io.TFRecordWriter(fp) as writer:
-        for f in files:
-            write_to_file(writer, f)
-
-
 def get_files(input_dir):
     filetypes = ["jsonl.zst", ".txt", ".xz", ".tar.gz"]
     files = [list(Path(input_dir).glob(f"*{ft}")) for ft in filetypes]
@@ -131,7 +126,7 @@ def get_files(input_dir):
     return [str(item) for sublist in files for item in sublist]
 
 
-def create_tfrecords(files, args, process_no):
+def create_tfrecords(files, args):
     enc = GPT2TokenizerFast.from_pretrained('gpt2')
 
     data_to_prepend = []
@@ -153,11 +148,12 @@ def create_tfrecords(files, args, process_no):
 
     tokenized_files_array = list(enforce_min_unique(tokenized_files_array, args.min_unique_tokens, enc))
 
-    write_tfrecord(tokenized_files_array, output_dir=args.output_dir, out_name=args.name)
+    fp = os.path.join(args.output_dir, f"{args.out_name}.tfrecords")
+    write_tfrecord(tokenized_files_array, fp)
 
 
 if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
     files = get_files(args.input_dir)
 
-    results = create_tfrecords((files, args, 0),)
+    results = create_tfrecords(files, args)
