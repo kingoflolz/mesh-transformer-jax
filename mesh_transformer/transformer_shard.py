@@ -190,8 +190,9 @@ class CausalTransformer:
 
                     output, new_state = transformer.generate_once(next_token, decode_state)
                     next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
+                    probabilities = jax.nn.softmax(output)
 
-                    output = (next_token, sample_info)
+                    output = (next_token, sample_info, probabilities)
                     new_carry = (next_token, new_state, new_key)
                     return new_carry, output
 
