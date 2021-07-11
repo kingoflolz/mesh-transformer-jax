@@ -176,7 +176,7 @@ class CausalTransformer:
                 "opt_state": optimizer.init(params)
             }
 
-        def generate(state, key, ctx, ctx_length, aux, sampler_options):
+        def generate(state, key, ctx, ctx_length, aux, sampler_options, return_logits=False):
             sampler = config["sampler"]
             gen_length = self.gen_length
 
@@ -188,11 +188,13 @@ class CausalTransformer:
                     next_token, decode_state, sample_key = carry
                     sample_key, new_key = jax.random.split(sample_key)
 
-                    output, new_state = transformer.generate_once(next_token, decode_state)
-                    next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
-                    probabilities = jax.nn.softmax(output)
+                    logits, new_state = transformer.generate_once(next_token, decode_state)
+                    next_token, sample_info = sampler(sample_key, logits, sampler_input, **sampler_options)
 
-                    output = (next_token, sample_info, probabilities)
+                    if return_logits:
+                        output = (next_token, sample_info, logits)
+                    else:
+                        output = (next_token, sample_info)
                     new_carry = (next_token, new_state, new_key)
                     return new_carry, output
 
@@ -300,7 +302,7 @@ class CausalTransformer:
         # print(f"eval done in {time.time() - start:.06}s")
         return out
 
-    def generate(self, ctx, ctx_length, gen_length, sampler_options):
+    def generate(self, ctx, ctx_length, gen_length, sampler_options, return_logits=False):
         key = hk.PRNGSequence(random.randint(0, 2 ** 60))
 
         batch_size = ctx.shape[0]
@@ -312,7 +314,8 @@ class CausalTransformer:
                                   ctx,
                                   np.array(ctx_length, dtype=np.uint32),
                                   aux,
-                                  sampler_options)
+                                  sampler_options,
+                                  return_logits=return_logits)
 
 
 # this bypasses the CausalTransformerShard class (which causes ugly code) but in return allows layers to be processed
