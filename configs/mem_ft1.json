@@ -1,0 +1,40 @@
+{
+  "layers": 28,
+  "d_model": 4096,
+  "n_heads": 16,
+  "n_vocab": 50400,
+  "norm": "layernorm",
+  "pe": "rotary",
+  "pe_rotary_dims": 64,
+
+  "seq": 2048,
+  "cores_per_replica": 8,
+  "per_replica_batch": 1,
+  "gradient_accumulation_steps": 16,
+
+  "warmup_steps": 3,
+  "anneal_steps": 7,
+  "lr": 5e-5,
+  "end_lr": 1e-5,
+  "weight_decay": 0.1,
+  "total_steps": 10,
+
+  "tpu_size": 8,
+
+  "bucket": "wyrd-euro-w4a",
+  "model_dir": "mem_finetune_1",
+
+  "train_set": "mem.train.index",
+  "val_set": {},
+
+  "eval_harness_tasks": [
+  ],
+
+  "val_batches": 0,
+  "val_every": 0,
+  "ckpt_every": 10,
+  "keep_every": 10,
+
+  "name": "mem_ft1",
+  "comment": ""
+}
