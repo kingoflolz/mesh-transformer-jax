@@ -135,7 +135,7 @@ def get_connection(
     return outputs
 
 
-def start_ray(conn, address):
+def start_ray(conn, address, version=1):
     conn.sudo('rm -rf *.py')
     conn.sudo('rm -rf mesh_transformer')
 
@@ -149,7 +149,10 @@ def start_ray(conn, address):
 
     conn.sudo('python3 setup.py install', hide=True)
 
-    conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
+    if version == 2:
+        conn.put("scripts/init_ray_v2.sh", "/tmp/ray-tpu.sh")
+    else:
+        conn.put("scripts/init_ray.sh", "/tmp/ray-tpu.sh")
     conn.sudo('chmod +x /tmp/ray-tpu.sh', hide=True)
     conn.sudo('/tmp/ray-tpu.sh', hide=True)
     try:
@@ -159,4 +162,4 @@ def start_ray(conn, address):
 
     time.sleep(1)
 
-    conn.run(f"ray start --address={address} --resources='" + '{"tpu": 1}\'', hide=True)
+    conn.run(f"TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD={32 * 1024**3} ray start --address={address} --resources='" + '{"tpu": 1}\'', hide=True)

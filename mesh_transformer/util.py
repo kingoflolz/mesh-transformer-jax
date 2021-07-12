@@ -1,7 +1,17 @@
 import jax
 import jax.numpy as jnp
+from jax.experimental.pjit import with_sharding_constraint
 from optax._src.transform import OptState, GradientTransformation, AdditiveWeightDecayState
-import numpy as np
+
+
+# same as with_sharding_constraint but doesn't fail if run outside of pjit/mesh context
+def maybe_shard(x, resource):
+    try:
+        return with_sharding_constraint(x, resource)
+    except ValueError as e:
+        print(e)
+        return x
+
 
 def gpt3_schedule(warmup_steps,
                   total_steps,
@@ -18,7 +28,6 @@ def gpt3_schedule(warmup_steps,
 
 def global_norm(updates):
     pre_sqrt = sum([jnp.sum(jnp.square(x)) for x in jax.tree_leaves(updates)])
-    pre_sqrt = jax.lax.psum(pre_sqrt, "shard")
     return jnp.sqrt(pre_sqrt)
 
 

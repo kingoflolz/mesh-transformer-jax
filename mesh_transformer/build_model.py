@@ -35,7 +35,7 @@ def build_model(params, tpu_name, region, preemptible, version=1):
     address = head_info['redis_address']
 
     with multiprocessing.pool.ThreadPool(processes=len(conns)) as p:
-        p.map(functools.partial(start_ray, address=address), conns)
+        p.map(functools.partial(start_ray, address=address, version=version), conns)
 
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
@@ -55,5 +55,5 @@ def build_model(params, tpu_name, region, preemptible, version=1):
     else:
         raise Exception(f"Version {version} does not exist")
 
-    t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn)
+    t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn, version)
     return t

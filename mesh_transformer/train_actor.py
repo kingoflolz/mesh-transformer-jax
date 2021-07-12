@@ -18,10 +18,9 @@ class NetworkRunner(object):
         import jax
         from jax.experimental.maps import thread_resources, ResourceEnv, Mesh
         import haiku as hk
-        from mesh_transformer.checkpoint import write_ckpt, read_ckpt
         # jax.experimental.maps.EXPERIMENTAL_SPMD_LOWERING = True
 
-        thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
+        # thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
 
         start = time.time()
         # print(jax.devices())
@@ -32,9 +31,7 @@ class NetworkRunner(object):
         with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
             start = time.time()
             network = self.network_builder()
-            param_count = hk.data_structures.tree_size(network.state['params'])
             print(f"Initialized in {time.time() - start:.06}s")
-            print(f"Total parameters: {param_count}")
 
             while True:
                 operation, input = self.input_q.get()
@@ -46,10 +43,10 @@ class NetworkRunner(object):
                     self.output_q.put(network.generate(*input))
                 elif operation == "write_ckpt":
                     path, shard = input
-                    write_ckpt(network.state, path, shard)
+                    network.write_ckpt(path, shard)
                     self.output_q.put(None)
                 elif operation == "load_ckpt":
-                    network.state = read_ckpt(network.state, input, devices.shape[1])
+                    network.load_ckpt(input)
                     self.output_q.put(network.state["step"][0])
                 elif operation == "get_params":
                     self.output_q.put(hk.data_structures.tree_size(network.state['params']))

@@ -1,11 +1,12 @@
 # Mesh Transformer JAX
 
-A haiku library using the `xmap` operator in Jax for model parallelism of transformers.
+A haiku library using the `xmap`/`pjit` operators in Jax for model parallelism of transformers.
 
 The parallelism scheme is similar to the [original Megatron-LM](https://arxiv.org/abs/1909.08053), which is efficient
-on TPUs due to the high speed 2d mesh network.
+on TPUs due to the high speed 2d mesh network. There is also an experimental model version which implements [ZeRo style
+sharding](https://arxiv.org/abs/1910.02054).
 
-This library is designed for scalability up to approximately 20B parameters on TPUv3s, beyond which different
+This library is designed for scalability up to approximately 40B parameters on TPUv3s, beyond which different
 parallelism strategies should be used. See other implementations such as
 [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) or [DeepSpeed](https://github.com/microsoft/DeepSpeed) for that.
 
@@ -169,5 +170,5 @@ Feel free to open a github issue or reach out over email (in profile).
 - [x] mixed precision
 - [x] deal with preemptible TPUs
 - [x] test and validate generation
-- [ ] properly support MP > 8 for > 6B models
-- [ ] shard activations instead of replicating for memory efficiency
+- [x] shard activations instead of replicating for memory efficiency (in v2)
+- [x] support ZeRO style sharding (in v2)
