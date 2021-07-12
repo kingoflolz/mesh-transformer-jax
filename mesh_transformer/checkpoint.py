@@ -207,7 +207,7 @@ def load_ckpt_v2(model_state, dir):
     print(f"meta loaded in {time.time() - start:.06}s")
 
     new_model_state = {
-        "step": np.array(meta["step"]),
+        "step": np.array([meta["step"]]),
     }
 
     start = time.time()
