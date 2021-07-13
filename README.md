@@ -1,6 +1,6 @@
 # Mesh Transformer JAX
 
-A haiku library using the `xmap`/`pjit` operators in Jax for model parallelism of transformers.
+A haiku library using the `xmap`/`pjit` operators in JAX for model parallelism of transformers.
 
 The parallelism scheme is similar to the [original Megatron-LM](https://arxiv.org/abs/1909.08053), which is efficient
 on TPUs due to the high speed 2d mesh network. There is also an experimental model version which implements [ZeRo style
@@ -12,6 +12,10 @@ parallelism strategies should be used. See other implementations such as
 
 One future direction for research is integrating this codebase with
 [swarm-jax](https://github.com/kingoflolz/swarm-jax), to achieve further scalability with pipeline parallelism.
+
+## Updates
+
+**12-07-21**: Added [guide to fine tuning](howto_finetune.md)
 
 # Pretrained Models
 
@@ -131,11 +135,10 @@ shards in the case of GPT-J-6B) down to a smaller number, such as for when runni
 
 ### Fine-tuning
 
-**Added July 12 2021:** Please read the new guide in the repo, `howto_finetune.md`, for thorough fine-tuning instructions. Below are the original instructions.
+To fine-tune the model, run `device_train.py` on a TPU VM.  Using a TPU v8-3, you can fine-tune at a rate of ~5000
+tokens/second, which should be sufficient for small-to-medium-size datasets.
 
-To fine-tune the model, run `device_train.py` on a TPU VM.  If you use a TPU v8-3, you can fine-tune at a rate of ~5000 tokens/second, which should be sufficient for small-to-medium-size datasets.
-
-For usage information, run `python3 device_train.py --help`.
+Please read the [step by step guide](howto_finetune.md) for thorough fine-tuning instructions.
 
 # Citation
 
