@@ -12,29 +12,29 @@
   "per_replica_batch": 1,
   "gradient_accumulation_steps": 16,
 
-  "warmup_steps": 3,
-  "anneal_steps": 7,
+  "warmup_steps": 7,
+  "anneal_steps": 65,
   "lr": 5e-5,
   "end_lr": 1e-5,
   "weight_decay": 0.1,
-  "total_steps": 10,
+  "total_steps": 72,
 
   "tpu_size": 8,
 
-  "bucket": "wyrd-euro-w4a",
-  "model_dir": "mem_finetune_1",
+  "bucket": "your-bucket",
+  "model_dir": "finetune_dir",
 
-  "train_set": "mem.train.index",
+  "train_set": "example.train.index",
   "val_set": {},
 
   "eval_harness_tasks": [
   ],
 
   "val_batches": 0,
-  "val_every": 20,
-  "ckpt_every": 10,
-  "keep_every": 10,
+  "val_every": 80,
+  "ckpt_every": 72,
+  "keep_every": 72,
 
-  "name": "mem_ft1",
+  "name": "example_model",
   "comment": ""
 }

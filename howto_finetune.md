@@ -1,4 +1,4 @@
-# How to Fine Tune GPT-J - The Basics
+# How to Fine-Tune GPT-J - The Basics
 
 Before anything else, you'll likely want to apply for access to the TPU Research Cloud (TRC). Combined with a Google Cloud free trial, that should allow you to do everything here for free. Once you're in TRC, you need to create a project, then with the name of the new project fill out the form that was emailed to you. Use `create_tfrecords.py` from the [GPT-NEO](https://github.com/EleutherAI/gpt-neo/blob/master/data/create_tfrecords.py) repo to prepare your data as tfrecords; I might do a separate guide on that. Another thing you might want to do is fork the mesh-transformer-jax repo to make it easier to add and modify the config files.
 
