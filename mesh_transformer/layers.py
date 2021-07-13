@@ -135,6 +135,20 @@ def fixed_pos_embedding(x, seq_dim=0):
 
 
 def rotate_every_two(x):
+    x1 = x[:, :, ::2]
+    x2 = x[:, :, 1::2]
+
+    x = jnp.stack((-x2, x1), axis=-1)
+
+    return rearrange(x, '... d j -> ... (d j)')
+
+
+def apply_rotary_pos_emb(x, sincos):
+    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j=2)[-x.shape[0]:, None, :], sincos)
+    return (x * cos) + (rotate_every_two(x) * sin)
+
+
+def rotate_every_two_v2(x):
     x1 = x[:, :, :, ::2]
     x2 = x[:, :, :, 1::2]
 
@@ -143,9 +157,9 @@ def rotate_every_two(x):
     return rearrange(x, '... d j -> ... (d j)')
 
 
-def apply_rotary_pos_emb(x, sincos):
+def apply_rotary_pos_emb_v2(x, sincos):
     sin, cos = map(lambda t: repeat(t, '... b n -> ... b (n j)', j=2)[-x.shape[-3]:, None, :], sincos)
-    return (x * cos) + (rotate_every_two(x) * sin)
+    return (x * cos) + (rotate_every_two_v2(x) * sin)
 
 
 class EmbeddingShard(hk.Module):
@@ -375,8 +389,8 @@ class TransformerLayerShardV2(hk.Module):
         q_pass = q[:, :, :, self.d_rotary:]
 
         sincos = fixed_pos_embedding(k_rot, seq_dim=1)
-        q_rot = apply_rotary_pos_emb(q_rot, sincos)
-        k_rot = apply_rotary_pos_emb(k_rot, sincos)
+        q_rot = apply_rotary_pos_emb_v2(q_rot, sincos)
+        k_rot = apply_rotary_pos_emb_v2(k_rot, sincos)
         q_rot = maybe_shard(q_rot, P("dp", None, "mp", None))
         k_rot = maybe_shard(k_rot, P("dp", None, "mp", None))
 
