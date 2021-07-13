@@ -13,7 +13,7 @@ from jax.experimental.pjit import pjit
 from mesh_transformer.checkpoint import read_ckpt, write_ckpt, write_ckpt_v2, load_ckpt_v2
 from mesh_transformer.layers import EmbeddingShard, TransformerLayerShard, RelativePositionEmbs, ProjectionShard, \
     TransformerLayerShardV2, Projection, EmbeddingShardV2
-from mesh_transformer.util import to_f32, to_bf16, maybe_shard
+from mesh_transformer.util import to_f32, to_bf16, maybe_shard, head_print
 from jax.experimental import PartitionSpec as P
 
 
@@ -258,17 +258,17 @@ class CausalTransformer:
         example_shape = (max(dp // jax.host_count(), 1), seq,)
         x = jax.random.uniform(next(key), example_shape, minval=0, maxval=vocab).astype(jnp.uint32)  # batch, len
 
-        print("key shape", jnp.array(key.take(mp_per_host)).shape)
-        print("in shape", x.shape)
+        head_print("key shape", jnp.array(key.take(mp_per_host)).shape)
+        head_print("in shape", x.shape)
 
-        print("dp", dp)
-        print("mp", mp)
+        head_print("dp", dp)
+        head_print("mp", mp)
 
         self.gen_length = 1
         self.state = self.init_xmap(jnp.array(key.take(mp_per_host)), x)
 
         param_count = hk.data_structures.tree_size(self.state['params'])
-        print(f"Total parameters: {param_count}")
+        head_print(f"Total parameters: {param_count}")
 
     def write_ckpt(self, path, shard):
         write_ckpt(self.state, path, shard)
@@ -422,7 +422,7 @@ class CausalTransformerV2:
         key = hk.PRNGSequence(42)
         x = jax.random.uniform(next(key), (mp * dp, 16), minval=0, maxval=1).astype(jnp.uint32)  # batch, seq
 
-        print("starting shape evaluation")
+        head_print("starting shape evaluation")
 
         param_shapes = jax.eval_shape(init, jax.random.PRNGKey(42), x)
 
@@ -436,9 +436,8 @@ class CausalTransformerV2:
                 "params": jax.tree_map(partial(shard_strategy, parallel=["mp", "dp"]), param_shapes["params"]),
             }
 
-        if jax.host_id() == 0:
-            print("sharding strategy:")
-            jax.tree_multimap(print, state_shard, param_shapes)
+        head_print("sharding strategy:")
+        jax.tree_multimap(head_print, state_shard, param_shapes)
 
         self.init_pjit = pjit(init, in_axis_resources=(None, P("dp")), out_axis_resources=state_shard)
 
@@ -535,9 +534,13 @@ class CausalTransformerV2:
             return projection_apply_fn(params["proj"], x, y)
 
         def eval(state, ctx, tgt, ctx_length):
-            mask = (jnp.arange(0, ctx.shape[1])[None, :] > ctx_length[0, None]) * -1e10
+            mask = (jnp.arange(0, ctx.shape[1])[None, :] > ctx_length[:, None]) * -1e10
 
-            return eval_apply_fn(to_bf16(state["params"]), ctx, tgt, mask)
+            # head_print("mask.shape", mask.shape)
+            # head_print("ctx.shape", ctx.shape)
+            # head_print("ctx_length.shape", ctx_length.shape)
+
+            return eval_apply_fn(to_bf16(state["params"]), ctx, tgt, mask[:, None, None, :])
 
         self.eval_pjit = pjit(eval,
                               in_axis_resources=(state_shard, P("dp"), P("dp"), P("dp")),
@@ -549,15 +552,15 @@ class CausalTransformerV2:
         example_shape = (max(dp // jax.host_count(), 1), seq,)
         x = jax.random.uniform(next(key), example_shape, minval=0, maxval=vocab).astype(jnp.uint32)  # batch, len
 
-        print("in shape", x.shape)
+        head_print("in shape", x.shape)
 
-        print("dp", dp)
-        print("mp", mp)
+        head_print("dp", dp)
+        head_print("mp", mp)
 
         self.state = self.init_pjit(next(key), x)
 
         param_count = hk.data_structures.tree_size(self.state['params'])
-        print(f"Total parameters: {param_count * dp}")
+        head_print(f"Total parameters: {param_count * dp}")
 
     def write_ckpt(self, path, _):
         write_ckpt_v2(self.state, path)
@@ -599,6 +602,8 @@ class CausalTransformerV2:
             ctx_length = sample["ctx_length"]
         else:
             ctx_length = np.array([len(sample["obs"][0])] * len(sample["obs"]))
+
+        # head_print("ctx_length in eval", ctx_length)
 
         out = self.eval_pjit(self.state, sample["obs"], sample["target"], ctx_length)
         # print(f"eval dispatched in {time.time() - start:.06}s")

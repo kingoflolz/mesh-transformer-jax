@@ -3,6 +3,8 @@ import time
 import numpy as np
 from queue import Queue
 
+from mesh_transformer.util import head_print
+
 
 @ray.remote(resources={"tpu": 1})
 class NetworkRunner(object):
@@ -24,14 +26,14 @@ class NetworkRunner(object):
 
         start = time.time()
         # print(jax.devices())
-        print(f"jax devices: {jax.device_count()}")
-        print(f"jax runtime initialized in {time.time() - start:.06}s")
+        head_print(f"jax devices: {jax.device_count()}")
+        head_print(f"jax runtime initialized in {time.time() - start:.06}s")
         devices = np.array(jax.devices()).reshape(self.mesh_shape)
 
         with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
             start = time.time()
             network = self.network_builder()
-            print(f"Initialized in {time.time() - start:.06}s")
+            head_print(f"Initialized in {time.time() - start:.06}s")
 
             while True:
                 operation, input = self.input_q.get()

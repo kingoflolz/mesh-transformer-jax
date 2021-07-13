@@ -170,6 +170,12 @@ def unshard_axis(x, axis_name):
     return x
 
 
+# print but only on the first node
+def head_print(*args, **kwargs):
+    if jax.process_index() == 0:
+        print(*args, **kwargs)
+
+
 if __name__ == "__main__":
     sch = gpt3_schedule(1_000, 20_000, 1e-4, 1e-5)
 

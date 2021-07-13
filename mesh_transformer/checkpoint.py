@@ -10,6 +10,8 @@ import multiprocessing
 
 from smart_open import open
 
+from mesh_transformer.util import head_print
+
 pieces = 16  # how many files to split each shard across
 
 
@@ -181,19 +183,19 @@ def parallel_read(old, fname):
 
 def write_ckpt_v2(model_state, dir):
     start = time.time()
-    if jax.host_id() == 0:
+    if jax.process_index() == 0:
         print("step:", model_state["step"])
         with open(dir + "/meta.json", "w") as f:
             json.dump({"total_hosts": jax.host_count(), "step": int(model_state["step"])}, f)
         print(f"meta written in {time.time() - start:.06}s")
 
     start = time.time()
-    parallel_write(jax.tree_flatten(model_state["params"])[0], dir + f"/params/shard_{jax.host_id()}.npz")
-    print(f"params written in {time.time() - start:.06}s")
+    parallel_write(jax.tree_flatten(model_state["params"])[0], dir + f"/params/shard_{jax.process_index()}.npz")
+    head_print(f"params written in {time.time() - start:.06}s")
 
     start = time.time()
-    parallel_write(jax.tree_flatten(model_state["opt_state"])[0], dir + f"/opt_state/shard_{jax.host_id()}.npz")
-    print(f"opt_state written in {time.time() - start:.06}s")
+    parallel_write(jax.tree_flatten(model_state["opt_state"])[0], dir + f"/opt_state/shard_{jax.process_index()}.npz")
+    head_print(f"opt_state written in {time.time() - start:.06}s")
 
 
 def load_ckpt_v2(model_state, dir):
@@ -204,18 +206,18 @@ def load_ckpt_v2(model_state, dir):
     # TODO: make this work in the general case
     assert meta["total_hosts"] == jax.host_count(), "Must load with same number of hosts as when saved"
 
-    print(f"meta loaded in {time.time() - start:.06}s")
+    head_print(f"meta loaded in {time.time() - start:.06}s")
 
-    new_model_state = {
+    new_state = {
         "step": np.array([meta["step"]]),
     }
 
     start = time.time()
-    new_model_state["params"] = parallel_read(model_state["params"], dir + f"/params/shard_{jax.host_id()}.npz")
-    print(f"params loaded in {time.time() - start:.06}s")
+    new_state["params"] = parallel_read(model_state["params"], dir + f"/params/shard_{jax.process_index()}.npz")
+    head_print(f"params loaded in {time.time() - start:.06}s")
 
     start = time.time()
-    new_model_state["opt_state"] = parallel_read(model_state["opt_state"], dir + f"/opt_state/shard_{jax.host_id()}.npz")
-    print(f"opt_state loaded in {time.time() - start:.06}s")
+    new_state["opt_state"] = parallel_read(model_state["opt_state"], dir + f"/opt_state/shard_{jax.process_index()}.npz")
+    head_print(f"opt_state loaded in {time.time() - start:.06}s")
 
-    return new_model_state
+    return new_state

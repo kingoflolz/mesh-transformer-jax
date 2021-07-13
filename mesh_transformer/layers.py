@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 from einops import rearrange, repeat
 
-from mesh_transformer.util import f_psum, g_psum, maybe_shard
+from mesh_transformer.util import f_psum, g_psum, maybe_shard, head_print
 from jax.experimental import PartitionSpec as P
 from jax.experimental.maps import thread_resources
 
@@ -465,9 +465,15 @@ class TransformerLayerShardV2(hk.Module):
 
         q, v, k, ff = self.input(x)
 
+        # head_print("x.shape", x.shape)
+        # head_print("attn_bias.shape", attn_bias.shape)
+
         seq_len = x.shape[1]
         causal_mask = np.tril(np.ones((seq_len, seq_len)))[None, :, :]
         bias = -1e10 * (1. - causal_mask)
+
+        # head_print("bias.shape", bias.shape)
+
         bias += attn_bias
 
         attn_out = self.self_attn(q, v, k, bias)
