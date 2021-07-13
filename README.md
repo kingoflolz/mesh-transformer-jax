@@ -131,6 +131,8 @@ shards in the case of GPT-J-6B) down to a smaller number, such as for when runni
 
 ### Fine-tuning
 
+**Added July 12 2021:** Please read the new guide in the repo, `howto_finetune.md`, for thorough fine-tuning instructions. Below are the original instructions.
+
 To fine-tune the model, run `device_train.py` on a TPU VM.  If you use a TPU v8-3, you can fine-tune at a rate of ~5000 tokens/second, which should be sufficient for small-to-medium-size datasets.
 
 For usage information, run `python3 device_train.py --help`.
