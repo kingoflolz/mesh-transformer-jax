@@ -172,7 +172,7 @@ def unshard_axis(x, axis_name):
 
 # print but only on the first node
 def head_print(*args, **kwargs):
-    if jax.process_index() == 0:
+    if jax.host_id() == 0:
         print(*args, **kwargs)
 
 
