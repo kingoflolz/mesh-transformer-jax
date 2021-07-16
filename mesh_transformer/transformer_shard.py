@@ -176,7 +176,7 @@ class CausalTransformer:
                 "opt_state": optimizer.init(params)
             }
 
-        def generate(state, key, ctx, ctx_length, aux, sampler_options, return_logits=False):
+        def generate(state, key, ctx, ctx_length, aux, sampler_options):
             sampler = config["sampler"]
             gen_length = self.gen_length
 
@@ -191,7 +191,7 @@ class CausalTransformer:
                     logits, new_state = transformer.generate_once(next_token, decode_state)
                     next_token, sample_info = sampler(sample_key, logits, sampler_input, **sampler_options)
 
-                    if return_logits:
+                    if self.return_logits:
                         output = (next_token, sample_info, logits)
                     else:
                         output = (next_token, sample_info)
@@ -308,6 +308,7 @@ class CausalTransformer:
         batch_size = ctx.shape[0]
         aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
         self.gen_length = gen_length
+        self.return_logits = return_logits
 
         return self.generate_xmap(self.state,
                                   jnp.array(key.take(batch_size)),
