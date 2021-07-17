@@ -193,10 +193,13 @@ class CausalTransformer:
                     next_token, decode_state, sample_key = carry
                     sample_key, new_key = jax.random.split(sample_key)
 
-                    output, new_state = transformer.generate_once(next_token, decode_state)
-                    next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
+                    logits, new_state = transformer.generate_once(next_token, decode_state)
+                    next_token, sample_info = sampler(sample_key, logits, sampler_input, **sampler_options)
 
-                    output = (next_token, sample_info)
+                    if self.return_logits:
+                        output = (next_token, sample_info, logits)
+                    else:
+                        output = (next_token, sample_info)
                     new_carry = (next_token, new_state, new_key)
                     return new_carry, output
 
@@ -313,19 +316,21 @@ class CausalTransformer:
         # print(f"eval done in {time.time() - start:.06}s")
         return out
 
-    def generate(self, ctx, ctx_length, gen_length, sampler_options):
+    def generate(self, ctx, ctx_length, gen_length, sampler_options, return_logits=False):
         key = hk.PRNGSequence(random.randint(0, 2 ** 60))
 
         batch_size = ctx.shape[0]
         aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
         self.gen_length = gen_length
+        self.return_logits = return_logits
 
         return self.generate_xmap(self.state,
                                   jnp.array(key.take(batch_size)),
                                   ctx,
                                   np.array(ctx_length, dtype=np.uint32),
                                   aux,
-                                  sampler_options)
+                                  sampler_options,
+                                  return_logits=return_logits)
 
 
 # this bypasses the CausalTransformerShard class (which causes ugly code) but in return allows layers to be processed
