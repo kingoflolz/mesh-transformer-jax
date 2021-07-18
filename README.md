@@ -1,16 +1,21 @@
 # Mesh Transformer JAX
 
-A haiku library using the `xmap` operator in Jax for model parallelism of transformers.
+A haiku library using the `xmap`/`pjit` operators in JAX for model parallelism of transformers.
 
 The parallelism scheme is similar to the [original Megatron-LM](https://arxiv.org/abs/1909.08053), which is efficient
-on TPUs due to the high speed 2d mesh network.
+on TPUs due to the high speed 2d mesh network. There is also an experimental model version which implements [ZeRo style
+sharding](https://arxiv.org/abs/1910.02054).
 
-This library is designed for scalability up to approximately 20B parameters on TPUv3s, beyond which different
+This library is designed for scalability up to approximately 40B parameters on TPUv3s, beyond which different
 parallelism strategies should be used. See other implementations such as
 [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) or [DeepSpeed](https://github.com/microsoft/DeepSpeed) for that.
 
 One future direction for research is integrating this codebase with
 [swarm-jax](https://github.com/kingoflolz/swarm-jax), to achieve further scalability with pipeline parallelism.
+
+## Updates
+
+**12-07-21**: Added [guide to fine tuning](howto_finetune.md)
 
 # Pretrained Models
 
@@ -130,9 +135,10 @@ shards in the case of GPT-J-6B) down to a smaller number, such as for when runni
 
 ### Fine-tuning
 
-To fine-tune the model, run `device_train.py` on a TPU VM.  If you use a TPU v8-3, you can fine-tune at a rate of ~5000 tokens/second, which should be sufficient for small-to-medium-size datasets.
+To fine-tune the model, run `device_train.py` on a TPU VM.  Using a TPU v3-8, you can fine-tune at a rate of ~5000
+tokens/second, which should be sufficient for small-to-medium-size datasets.
 
-For usage information, run `python3 device_train.py --help`.
+Please read the [step by step guide](howto_finetune.md) for thorough fine-tuning instructions.
 
 # Citation
 
@@ -169,5 +175,5 @@ Feel free to open a github issue or reach out over email (in profile).
 - [x] mixed precision
 - [x] deal with preemptible TPUs
 - [x] test and validate generation
-- [ ] properly support MP > 8 for > 6B models
-- [ ] shard activations instead of replicating for memory efficiency
+- [x] shard activations instead of replicating for memory efficiency (in v2)
+- [x] support ZeRO style sharding (in v2)

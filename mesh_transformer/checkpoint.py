@@ -1,5 +1,6 @@
 import functools
 import io
+import json
 import time
 
 import jax
@@ -8,6 +9,8 @@ import numpy as np
 import multiprocessing
 
 from smart_open import open
+
+from mesh_transformer.util import head_print
 
 pieces = 16  # how many files to split each shard across
 
@@ -151,3 +154,70 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
     if not load_opt:
         loaded_pytree['opt_state'] = original_opt_state
     return loaded_pytree
+
+
+def parallel_write(arrays, fname):
+    with open(fname, "wb") as f:
+        np.savez(f, *arrays)
+
+
+def parallel_read(old, fname):
+    old_val, treedef = jax.tree_flatten(old)
+    with open(fname, "rb") as f:
+        buf = f.read()
+        f_io = io.BytesIO(buf)
+        loaded = np.load(f_io)
+
+    new_vals = []
+    for i in loaded:
+        new_vals.append(loaded[i])
+
+    for o, n in zip(new_vals, old_val):
+        assert o.shape == n.shape, "Incompatible checkpoint"
+
+        if o.dtype == np.dtype('V2'):
+            o.dtype = jnp.bfloat16
+
+    return jax.tree_unflatten(treedef, new_vals)
+
+
+def write_ckpt_v2(model_state, dir):
+    start = time.time()
+    if jax.host_id() == 0:
+        print("step:", model_state["step"])
+        with open(dir + "/meta.json", "w") as f:
+            json.dump({"total_hosts": jax.host_count(), "step": int(model_state["step"])}, f)
+        print(f"meta written in {time.time() - start:.06}s")
+
+    start = time.time()
+    parallel_write(jax.tree_flatten(model_state["params"])[0], dir + f"/params/shard_{jax.host_id()}.npz")
+    head_print(f"params written in {time.time() - start:.06}s")
+
+    start = time.time()
+    parallel_write(jax.tree_flatten(model_state["opt_state"])[0], dir + f"/opt_state/shard_{jax.host_id()}.npz")
+    head_print(f"opt_state written in {time.time() - start:.06}s")
+
+
+def load_ckpt_v2(model_state, dir):
+    start = time.time()
+    with open(dir + "/meta.json", "r") as f:
+        meta = json.load(f)
+
+    # TODO: make this work in the general case
+    assert meta["total_hosts"] == jax.host_count(), "Must load with same number of hosts as when saved"
+
+    head_print(f"meta loaded in {time.time() - start:.06}s")
+
+    new_state = {
+        "step": np.array([meta["step"]]),
+    }
+
+    start = time.time()
+    new_state["params"] = parallel_read(model_state["params"], dir + f"/params/shard_{jax.host_id()}.npz")
+    head_print(f"params loaded in {time.time() - start:.06}s")
+
+    start = time.time()
+    new_state["opt_state"] = parallel_read(model_state["opt_state"], dir + f"/opt_state/shard_{jax.host_id()}.npz")
+    head_print(f"opt_state loaded in {time.time() - start:.06}s")
+
+    return new_state
