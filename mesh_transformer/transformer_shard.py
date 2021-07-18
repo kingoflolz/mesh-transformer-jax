@@ -315,8 +315,7 @@ class CausalTransformer:
                                   ctx,
                                   np.array(ctx_length, dtype=np.uint32),
                                   aux,
-                                  sampler_options,
-                                  return_logits=return_logits)
+                                  sampler_options)
 
 
 # this bypasses the CausalTransformerShard class (which causes ugly code) but in return allows layers to be processed
