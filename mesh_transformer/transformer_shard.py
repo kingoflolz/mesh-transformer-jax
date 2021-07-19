@@ -1,3 +1,4 @@
+import gc
 import random
 import time
 from functools import partial
@@ -473,9 +474,6 @@ class CausalTransformerV2:
             return projection_apply_fn(params["proj"], x, y)
 
         def train(state, ctx, tgt):
-            ctx = jnp.transpose(ctx, (1, 0, 2))
-            tgt = jnp.transpose(tgt, (1, 0, 2))
-
             param_shard_startegy = jax.tree_map(partial(shard_strategy, parallel=["mp"]), param_shapes["params"])
 
             bf16_params = maybe_shard(to_bf16(state["params"]), param_shard_startegy)
@@ -507,7 +505,7 @@ class CausalTransformerV2:
             }
 
         self.train_pjit = pjit(train,
-                               in_axis_resources=(state_shard, P("dp"), P("dp")),
+                               in_axis_resources=(state_shard, P(None, "dp"), P(None, "dp")),
                                out_axis_resources=(None, None, state_shard),
                                donate_argnums=(0,))
 
@@ -537,18 +535,24 @@ class CausalTransformerV2:
 
             return projection_apply_fn(params["proj"], x, y)
 
-        def eval(state, ctx, tgt, ctx_length):
+        def eval(params, ctx, tgt, ctx_length):
             mask = (jnp.arange(0, ctx.shape[1])[None, :] > ctx_length[:, None]) * -1e10
 
             # head_print("mask.shape", mask.shape)
             # head_print("ctx.shape", ctx.shape)
             # head_print("ctx_length.shape", ctx_length.shape)
 
-            return eval_apply_fn(to_bf16(state["params"]), ctx, tgt, mask[:, None, None, :])
+            return eval_apply_fn(params, ctx, tgt, mask[:, None, None, :])
+
+        eval_shard_startegy = jax.tree_map(partial(shard_strategy, parallel=["mp"]), param_shapes["params"])
 
         self.eval_pjit = pjit(eval,
-                              in_axis_resources=(state_shard, P("dp"), P("dp"), P("dp")),
+                              in_axis_resources=(eval_shard_startegy, P("dp"), P("dp"), P("dp")),
                               out_axis_resources=P("dp"))
+
+        self.move_weights_pjit = pjit(lambda x: to_bf16(x),
+                                      in_axis_resources=(state_shard["params"], ),
+                                      out_axis_resources=eval_shard_startegy)
 
         seq = config["seq"]
         vocab = config["n_vocab"]
@@ -562,6 +566,7 @@ class CausalTransformerV2:
         head_print("mp", mp)
 
         self.state = self.init_pjit(next(key), x)
+        self.eval_weights = None
 
         param_count = hk.data_structures.tree_size(self.state['params'])
         head_print(f"Total parameters: {param_count * dp}")
@@ -577,11 +582,13 @@ class CausalTransformerV2:
         # print("sample", sample["obs"])
         # print("target", sample["target"])
 
-        # obs = sample["obs"]
-        # target = sample["target"]
+        obs = sample["obs"]
+        target = sample["target"]
 
-        obs = jnp.transpose(sample["obs"], (1, 0, 2))
-        target = jnp.transpose(sample["target"], (1, 0, 2))
+        if self.eval_weights is not None:
+            self.eval_weights = None
+            gc.collect()
+            head_print("deleted eval weights")
 
         # print("train sample", obs.shape)
         # print("train target", target.shape)
@@ -593,7 +600,7 @@ class CausalTransformerV2:
         loss = np.array(loss)
         last_loss = np.array(last_loss)
 
-        # print(f"iter done in {time.time() - start:.06}s")
+        # head_print(f"iter done in {time.time() - start:.06}s")
         return loss.mean(), last_loss.mean()
 
     def eval(self, sample):
@@ -602,6 +609,10 @@ class CausalTransformerV2:
 
         # start = time.time()
 
+        if self.eval_weights is None:
+            self.eval_weights = self.move_weights_pjit(self.state["params"])
+            head_print("created eval weights")
+
         if "ctx_length" in sample:
             ctx_length = sample["ctx_length"]
         else:
@@ -609,7 +620,7 @@ class CausalTransformerV2:
 
         # head_print("ctx_length in eval", ctx_length)
 
-        out = self.eval_pjit(self.state, sample["obs"], sample["target"], ctx_length)
+        out = self.eval_pjit(self.eval_weights, sample["obs"], sample["target"], ctx_length)
         # print(f"eval dispatched in {time.time() - start:.06}s")
 
         # np.array(out["loss"])
