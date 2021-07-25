@@ -55,5 +55,5 @@ def build_model(params, tpu_name, region, preemptible, version=1):
     else:
         raise Exception(f"Version {version} does not exist")
 
-    t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn, version)
+    t = TPUCluster((tpu_size // cores_per_replica, cores_per_replica), len(conns), model_fn, version=version)
     return t

@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.experimental.pjit import with_sharding_constraint
-from optax._src.transform import OptState, GradientTransformation, AdditiveWeightDecayState
+from optax import AdditiveWeightDecayState, GradientTransformation, OptState
 
 
 # same as with_sharding_constraint but doesn't fail if run outside of pjit/mesh context
