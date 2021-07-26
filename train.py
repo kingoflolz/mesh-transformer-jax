@@ -103,7 +103,11 @@ if __name__ == "__main__":
                                         sample_size=seq)
 
     # use dynamic seq length unless pe is fixed
-    adaptor = EvalHarnessAdaptor(t, seq, global_val_batch * 4, shrink=pe != "fixed")
+    adaptor = EvalHarnessAdaptor(t,
+                                 seq,
+                                 global_val_batch,
+                                 shrink=pe != "fixed",
+                                 min_seq=1024 if args.version == 2 else None)  # work around suboptimal pjit layout
 
     start = time.time()
     t.train(train_dataset.get_samples())
