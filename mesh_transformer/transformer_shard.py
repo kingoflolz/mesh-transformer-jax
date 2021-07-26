@@ -340,6 +340,10 @@ class CausalTransformerV2:
         self.config = config
         optimizer = config["optimizer"]
 
+        bf16_optimizer = config.get("bf16_optimizer", False)
+        early_cast = config.get("early_cast", False)
+        early_collect = config.get("early_collect", True)
+
         def embedding(x):
             x = maybe_shard(x, P("dp", None))
             return EmbeddingShardV2(config)(x)
@@ -414,9 +418,9 @@ class CausalTransformerV2:
             }
 
             return {
-                "params": ("early_cast" in config and to_bf16 or to_f32)(params),
+                "params": (to_bf16 if early_cast else to_f32)(params),
                 "step": np.array(0),
-                "opt_state": optimizer.init(params)
+                "opt_state": optimizer.init((to_bf16 if bf16_optimizer else to_f32)(params))
             }
 
         assert thread_resources.env.shape['mp'] == config["cores_per_replica"]
@@ -473,10 +477,13 @@ class CausalTransformerV2:
 
             return projection_apply_fn(params["proj"], x, y)
 
-        def train(state, ctx, tgt):
-            param_shard_startegy = jax.tree_map(partial(shard_strategy, parallel=["mp"]), param_shapes["params"])
+        mp_shard_strategy = jax.tree_map(partial(shard_strategy, parallel=["mp"]), param_shapes["params"])
 
-            bf16_params = maybe_shard(to_bf16(state["params"]), param_shard_startegy)
+        def train(state, ctx, tgt):
+            if early_collect:
+                bf16_params = maybe_shard(to_bf16(state["params"]), mp_shard_strategy)
+            else:
+                bf16_params = to_bf16(state["params"])
 
             def microbatch(old_grad, batch):
                 ctx, tgt = batch
@@ -512,6 +519,11 @@ class CausalTransformerV2:
         def eval_apply_fn(params, x, y, mask):
             embed_apply_fn, transformer_apply_fn = apply_fns()
 
+            if early_collect:
+                bf16_params = maybe_shard(to_bf16(params), mp_shard_strategy)
+            else:
+                bf16_params = to_bf16(params)
+
             def eval_loss(x, y):
                 loss, correct = Projection(config).loss(x, y)
                 return {
@@ -523,7 +535,7 @@ class CausalTransformerV2:
 
             projection_apply_fn = hk.without_apply_rng(hk.transform(eval_loss)).apply
 
-            x = embed_apply_fn(params["embed"], x)
+            x = embed_apply_fn(bf16_params["embed"], x)
 
             def apply_scan_fn(layer_in, layer_state):
                 x, mask = layer_in
@@ -531,9 +543,9 @@ class CausalTransformerV2:
 
             x = jax.lax.scan(apply_scan_fn,
                              (to_bf16(x), mask),
-                             xs=params["transformer"])[0][0]
+                             xs=bf16_params["transformer"])[0][0]
 
-            return projection_apply_fn(params["proj"], x, y)
+            return projection_apply_fn(bf16_params["proj"], x, y)
 
         def eval(params, ctx, tgt, ctx_length):
             mask = (jnp.arange(0, ctx.shape[1])[None, :] > ctx_length[:, None]) * -1e10
@@ -544,15 +556,14 @@ class CausalTransformerV2:
 
             return eval_apply_fn(params, ctx, tgt, mask[:, None, None, :])
 
-        eval_shard_startegy = jax.tree_map(partial(shard_strategy, parallel=["mp"]), param_shapes["params"])
-
         self.eval_pjit = pjit(eval,
-                              in_axis_resources=(eval_shard_startegy, P("dp"), P("dp"), P("dp")),
+                              in_axis_resources=(mp_shard_strategy if early_collect else state_shard["params"],
+                                                 P("dp"), P("dp"), P("dp")),
                               out_axis_resources=P("dp"))
 
         self.move_weights_pjit = pjit(lambda x: to_bf16(x),
                                       in_axis_resources=(state_shard["params"], ),
-                                      out_axis_resources=eval_shard_startegy)
+                                      out_axis_resources=mp_shard_strategy if early_collect else state_shard["params"])
 
         seq = config["seq"]
         vocab = config["n_vocab"]
@@ -566,6 +577,7 @@ class CausalTransformerV2:
         head_print("mp", mp)
 
         self.state = self.init_pjit(next(key), x)
+        self.state_shard = state_shard
         self.eval_weights = None
 
         param_count = hk.data_structures.tree_size(self.state['params'])
@@ -604,14 +616,18 @@ class CausalTransformerV2:
         return loss.mean(), last_loss.mean()
 
     def eval(self, sample):
-        # print("eval sample", sample["obs"].shape)
+        # head_print("eval sample", sample["obs"].shape)
         # print("eval target", sample["target"].shape)
 
-        # start = time.time()
+        start = time.time()
 
         if self.eval_weights is None:
             self.eval_weights = self.move_weights_pjit(self.state["params"])
-            head_print("created eval weights")
+
+            # blocking
+            jnp.zeros(()).block_until_ready()
+
+            head_print(f"created eval weights in {time.time() - start:.06}s")
 
         if "ctx_length" in sample:
             ctx_length = sample["ctx_length"]
