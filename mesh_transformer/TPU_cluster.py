@@ -18,11 +18,13 @@ class TPUCluster:
     def __init__(self,
                  mesh_shape,
                  node_count,
-                 model: Callable):
+                 model: Callable,
+                 version=1):
         assert ray.is_initialized()  # needs a valid ray cluster to start
         self.nodes = []
         self.node_count = node_count
         self.dp, self.mp = mesh_shape
+        self.version = version
 
         start = time.time()
 
@@ -195,8 +197,14 @@ class TPUCluster:
         # do sharded checkpoint writing
         start = time.time()
         res = []
-        for shard_id, node in zip(range(self.mp), itertools.cycle(self.nodes)):
-            res.append(node.write_ckpt.remote(f"gs://{bucket}/{path}/step_{step}/", shard_id))
+
+        if self.version == 1:
+            for shard_id, node in zip(range(self.mp), itertools.cycle(self.nodes)):
+                res.append(node.write_ckpt.remote(f"gs://{bucket}/{path}/step_{step}/", shard_id))
+        elif self.version == 2:
+            for node in self.nodes:
+                res.append(node.write_ckpt.remote(f"gs://{bucket}/{path}/step_{step}/", 0))
+
         ray.get(res)
         print(f"Wrote checkpoint in {time.time() - start:.06}s")
 

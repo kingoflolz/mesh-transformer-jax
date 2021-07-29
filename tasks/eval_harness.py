@@ -53,12 +53,13 @@ class EvalHarnessAdaptor(LM):
     def loglikelihood_rolling(self, requests):
         raise Exception("unimplemented")
 
-    def __init__(self, tpu_cluster, seq, batch, shrink):
+    def __init__(self, tpu_cluster, seq, batch, shrink, min_seq=None):
         super().__init__()
         self.tpu = tpu_cluster
         self.seq = seq
         self.batch = batch
         self.shrink = shrink
+        self.min_seq = min_seq
 
         self.pool = multiprocessing.Pool(initializer=process_init)
         process_init()
@@ -72,9 +73,12 @@ class EvalHarnessAdaptor(LM):
         r = self.convert_requests(requests)
         zero_example = process_request(requests[0], self.seq)
 
-        for b in tqdm(sample_batch(r, self.batch, zero_example), desc="LM eval harness", total=len(requests) // self.batch):
+        for b in tqdm(sample_batch(r, self.batch, zero_example),
+                      desc="LM eval harness",
+                      total=len(requests) // self.batch):
+
             if self.shrink:
-                b = shrink_seq(b)
+                b = shrink_seq(b, min_seq=self.min_seq)
 
             out = self.tpu.eval(b)
 

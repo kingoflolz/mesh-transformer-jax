@@ -75,7 +75,7 @@ if __name__ == "__main__":
     t = build_model(params, tpu_name, region, preemptible, version=args.version)
 
     try:
-        # t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
+        t.save(0, bucket, model_dir, init=True, overwrite=clean_start)
         step = 0
         train_load_restore = None
     except Exception as e:
@@ -103,7 +103,11 @@ if __name__ == "__main__":
                                         sample_size=seq)
 
     # use dynamic seq length unless pe is fixed
-    adaptor = EvalHarnessAdaptor(t, seq, global_val_batch * 4, shrink=pe != "fixed")
+    adaptor = EvalHarnessAdaptor(t,
+                                 seq,
+                                 global_val_batch,
+                                 shrink=pe != "fixed",
+                                 min_seq=1024 if args.version == 2 else None)  # work around suboptimal pjit layout
 
     start = time.time()
     t.train(train_dataset.get_samples())

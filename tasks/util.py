@@ -10,10 +10,14 @@ def grouper(n, iterable, fillvalue):
 
 
 # divide the seq length by 2 until it would truncate actual context
-def shrink_seq(examples):
+def shrink_seq(examples, min_seq=None):
     length = examples["obs"].shape[-1]
 
     new_length = length // 2
+
+    if min_seq is not None:
+        if new_length < min_seq:
+            return examples
 
     max_length = np.max(examples["eval_mask"] * np.arange(0, length)) + 1
 
@@ -22,7 +26,7 @@ def shrink_seq(examples):
         examples["target"] = examples["target"][:, :new_length]
         examples["eval_mask"] = examples["eval_mask"][:, :new_length]
 
-        return shrink_seq(examples)
+        return shrink_seq(examples, min_seq=min_seq)
     else:
         return examples
 
