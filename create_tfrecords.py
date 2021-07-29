@@ -17,8 +17,6 @@ def parse_args():
     parser.add_argument("--input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("--output_dir", type=str,
                         help="Output directory")
-    parser.add_argument("--output_dir", type=str,
-                        default="./tfrecords", help="Where to put tfrecords")
     parser.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
     parser.add_argument("--normalize-with-wikitext-detokenize",
                         action="store_true", help="use wikitext detokenizer")
