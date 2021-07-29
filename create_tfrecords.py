@@ -192,7 +192,7 @@ def create_tfrecords(files, args):
         if ep_ix == 0:
             ep_len = len(tokenized_files_array)
 
-    total_sequence_len = len(tokenized_files_array)
+    total_sequence_len = len(all_sequences_across_epochs)
 
     fp = os.path.join(args.output_dir, f"{args.name}_{total_sequence_len}.tfrecords")
     write_tfrecord(all_sequences_across_epochs, fp)
