@@ -17,6 +17,8 @@ def parse_args():
     parser.add_argument("--input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("--output_dir", type=str,
                         help="Output directory")
+    parser.add_argument("--name", type=str,
+                        help="Name of output files will be TODO: write")
     parser.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
     parser.add_argument("--normalize-with-wikitext-detokenize",
                         action="store_true", help="use wikitext detokenizer")
@@ -192,7 +194,7 @@ def create_tfrecords(files, args):
 
     total_sequence_len = len(tokenized_files_array)
 
-    fp = os.path.join(args.output_dir, f"{args.out_name}_{total_sequence_len}.tfrecords")
+    fp = os.path.join(args.output_dir, f"{args.name}_{total_sequence_len}.tfrecords")
     write_tfrecord(all_sequences_across_epochs, fp)
 
 
