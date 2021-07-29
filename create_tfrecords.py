@@ -140,7 +140,7 @@ def archive_to_tokens(f, encoder, args, prefix=[]):
                 doc = ftfy.fix_text(doc, normalization='NFKC')
             if args.normalize_with_wikitext_detokenize:
                 doc = wikitext_detokenizer(doc)
-            doc = encoder.encode(doc) + encoder.eos_token_id  # read document from lmd and append separator token
+            doc = encoder.encode(doc) + [encoder.eos_token_id]  # read document from lmd and append separator token
             yield split_list(prefix + doc, 2049)  # split into n_ctx + 1 size chunks
             prefix = []
 
