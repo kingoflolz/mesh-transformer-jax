@@ -32,8 +32,9 @@ def parse_args():
         - set `warmup_steps`, `anneal_steps`, `lr`, `end_lr` to the lr schedule for your finetuning run
         - the global step will reset to 0, keep that in mind when writing your lr schedule
     To prepare data in the expected data format:
-        - use this notebook: https://github.com/EleutherAI/gpt-neo/blob/master/GPTNeo_example_notebook.ipynb
-        - after creating .tfrecords files, save their paths to a index file under `data/`, see existing files for examples
+        - use the script `create_finetune_tfrecords.py` in this repo to create data in the expected format
+        - upload the .tfrecords files to GCS
+        - save their GCS paths to a index file under `data/`, see existing files for examples
     """,
     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--config", type=str, default=None, help="Config file location")
