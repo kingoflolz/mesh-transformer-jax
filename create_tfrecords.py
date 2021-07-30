@@ -27,7 +27,9 @@ def parse_args():
             - this behavior can be disabled with --treat-eot-as-text
 
     This script creates a single .tfrecords file as output
-        - Why: the model's data loader ignores "trailing" data at the end of a
+        - Why: the model's data loader ignores "trailing" data (< 1 batch) at the end of a .tfrecords file
+            - this causes data loss if you have many .tfrecords files
+        - This is probably not appropriate for very large datasets
     """,
     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
