@@ -17,8 +17,9 @@ def parse_args():
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
+    parser.add_argument("--output-dir", type=str, default="", help="Output directory (defaults to current directory)")
 
-    cleaning_args = parser.add_argument_group('Optional data cleaning arguments')
+    cleaning_args = parser.add_argument_group('data cleaning arguments')
 
     cleaning_args.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
     cleaning_args.add_argument("--normalize-with-wikitext-detokenize",
@@ -33,7 +34,7 @@ def parse_args():
                                default=False, action="store_true",
                                help=eot_text_help)
 
-    shuffle_pack_args = parser.add_argument_group('Data shuffling/packing arguments')
+    shuffle_pack_args = parser.add_argument_group('data shuffling/packing arguments')
     repack_ep_help = "Repeat the data this many times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
     shuffle_pack_args.add_argument("--n-repack-epochs",
                                    type=int, default=1,
@@ -45,8 +46,7 @@ def parse_args():
                                    default=False, action="store_true",
                                    help="Disables shuffling, so the input and output data have the same order.")
 
-    misc_args = parser.add_argument_group('Miscellaneous arguments')
-    misc_args.add_argument("--output-dir", type=str, default="", help="Output directory (defaults to current directory)")
+    misc_args = parser.add_argument_group('miscellaneous arguments')
     misc_args.add_argument("--verbose",
                            default=False, action="store_true",
                            help="Prints extra information, such as the text removed by --min-unique-tokens")
