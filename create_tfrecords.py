@@ -21,10 +21,10 @@ def parse_args():
 
     cleaning_args = parser.add_argument_group('data cleaning arguments')
 
-    cleaning_args.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
+    cleaning_args.add_argument("--normalize-with-ftfy", action="store_true", help="Normalize text with ftfy")
     cleaning_args.add_argument("--normalize-with-wikitext-detokenize",
-                               action="store_true", help="use wikitext detokenizer")
-    minu_help = "Exclude repetitive documents with fewer than this many unique tokens, which can produce large gradients."
+                               action="store_true", help="Use wikitext detokenizer")
+    minu_help = "Exclude repetitive documents made up of < MIN_UNIQUE_TOKENS unique tokens. These can produce large gradients."
     minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value"
     cleaning_args.add_argument("--min-unique-tokens", type=int, default=0,
                                help=minu_help)
@@ -35,7 +35,7 @@ def parse_args():
                                help=eot_text_help)
 
     shuffle_pack_args = parser.add_argument_group('data shuffling/packing arguments')
-    repack_ep_help = "Repeat the data this many times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
+    repack_ep_help = "Repeat the data N_REPACK_EPOCHS times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
     shuffle_pack_args.add_argument("--n-repack-epochs",
                                    type=int, default=1,
                                    help=repack_ep_help
