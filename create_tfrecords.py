@@ -14,35 +14,45 @@ from tqdm import tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_dir", type=str, help="Path to where your files are located.")
-    parser.add_argument("--output_dir", type=str,
-                        help="Output directory")
-    parser.add_argument("--name", type=str,
-                        help="Name of output files will be TODO: write")
-    parser.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
-    parser.add_argument("--normalize-with-wikitext-detokenize",
-                        action="store_true", help="use wikitext detokenizer")
-    parser.add_argument("--min-unique-tokens", type=int, default=0,
-                        help="Exclude repetitive documents with fewer than this many unique tokens")
-    parser.add_argument("--seed", type=int, default=10,
-                        help="random seed for shuffling data")
-    parser.add_argument("--n-repack-epochs",
-                        type=int, default=1,
-                        help="TODO: write")
-    parser.add_argument("--preserve-data-order",
-                        default=False, action="store_true",
-                        help="Disables shuffling, so the input and output data have the same order.")
-    parser.add_argument("--treat-eot-as-text",
-                        default=False, action="store_true",
-                        help="TODO: write")
-    parser.add_argument("--verbose",
-                        default=False, action="store_true",
-                        help="TODO: write")
+    parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
+    parser.add_argument("name", type=str,
+                        help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
+
+    cleaning_args = parser.add_argument_group('Optional data cleaning arguments')
+
+    cleaning_args.add_argument("--normalize-with-ftfy", action="store_true", help="normalize with ftfy")
+    cleaning_args.add_argument("--normalize-with-wikitext-detokenize",
+                               action="store_true", help="use wikitext detokenizer")
+    minu_help = "Exclude repetitive documents with fewer than this many unique tokens, which can produce large gradients."
+    minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value"
+    cleaning_args.add_argument("--min-unique-tokens", type=int, default=0,
+                               help=minu_help)
+    eot_text_help = "Treats the string '<|endoftext|>' inside files as text rather than a document separator."
+    eot_text_help += " Not appropriate if your dataset is already concatenate on '<|endoftext|>'."
+    cleaning_args.add_argument("--treat-eot-as-text",
+                               default=False, action="store_true",
+                               help=eot_text_help)
+
+    shuffle_pack_args = parser.add_argument_group('Data shuffling/packing arguments')
+    repack_ep_help = "Repeat the data this many times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
+    shuffle_pack_args.add_argument("--n-repack-epochs",
+                                   type=int, default=1,
+                                   help=repack_ep_help
+                                   )
+    shuffle_pack_args.add_argument("--seed", type=int, default=10,
+                                   help="random seed for shuffling data")
+    shuffle_pack_args.add_argument("--preserve-data-order",
+                                   default=False, action="store_true",
+                                   help="Disables shuffling, so the input and output data have the same order.")
+
+    misc_args = parser.add_argument_group('Miscellaneous arguments')
+    misc_args.add_argument("--output-dir", type=str, default="", help="Output directory (defaults to current directory)")
+    misc_args.add_argument("--verbose",
+                           default=False, action="store_true",
+                           help="Prints extra information, such as the text removed by --min-unique-tokens")
 
     args = parser.parse_args()
 
-    if not args.output_dir.endswith("/"):
-        args.output_dir = args.output_dir + "/"
     if not args.input_dir.endswith("/"):
         args.input_dir = args.input_dir + "/"
 
@@ -204,7 +214,8 @@ def create_tfrecords(files, args):
 if __name__ == "__main__":
     args = parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
     files = get_files(args.input_dir)
 
     results = create_tfrecords(files, args)
