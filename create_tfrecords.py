@@ -13,7 +13,23 @@ from tqdm import tqdm
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="""
+    Converts a text dataset into the training data format expected by the model.
+
+    Adapted from the script create_tfrecords.py in the gpt-neo repo.
+
+    - Your text dataset:
+        - can be provided as .txt files, or as an archive (.tar.gz, .xz, jsonl.zst).
+        - can be one file or multiple
+            - using a single large file may use too much memory and crash - if this occurs, split the file up into a few files
+        - the model's end-of-text separator is added between the contents of each file
+        - if the string '<|endoftext|>' appears inside a file, it is treated as the model's end-of-text separator (not the actual string '<|endoftext|>')
+            - this behavior can be disabled with --treat-eot-as-text
+
+    This script creates a single .tfrecords file as output
+        - Why: the model's data loader ignores "trailing" data at the end of a
+    """,
+    formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
