@@ -153,6 +153,7 @@ def get_files(input_dir):
 
 
 def create_tfrecords(files, args):
+    GPT2TokenizerFast.max_model_input_sizes['gpt2'] = 1e20  # disables a misleading warning
     enc = GPT2TokenizerFast.from_pretrained('gpt2')
 
     random.seed(args.seed)
@@ -165,7 +166,9 @@ def create_tfrecords(files, args):
     for ep_ix in range(args.n_repack_epochs):
         tokenized_files_array = []
 
-        if not args.preserve_data_order:
+        if args.preserve_data_order:
+            files = sorted(files)
+        else:
             random.shuffle(files)
 
         print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\t{len(data_to_prepend)} tokens rolled over from last epoch\n\tfirst file this ep is {files[0]}')
