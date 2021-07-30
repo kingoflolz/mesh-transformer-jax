@@ -17,7 +17,7 @@ def parse_args():
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
-    parser.add_argument("--output-dir", type=str, default="", help="Output directory (defaults to current directory)")
+    parser.add_argument("--output-dir", type=str, default="", help="Output directory (default: directory)")
 
     cleaning_args = parser.add_argument_group('data cleaning arguments')
 
@@ -25,7 +25,7 @@ def parse_args():
     cleaning_args.add_argument("--normalize-with-wikitext-detokenize",
                                action="store_true", help="Use wikitext detokenizer")
     minu_help = "Exclude repetitive documents made up of < MIN_UNIQUE_TOKENS unique tokens. These can produce large gradients."
-    minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value"
+    minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value. (Default: 0)"
     cleaning_args.add_argument("--min-unique-tokens", type=int, default=0,
                                help=minu_help)
     eot_text_help = "Treats the string '<|endoftext|>' inside files as text rather than a document separator."
@@ -41,7 +41,7 @@ def parse_args():
                                    help=repack_ep_help
                                    )
     shuffle_pack_args.add_argument("--seed", type=int, default=10,
-                                   help="random seed for shuffling data")
+                                   help="random seed for shuffling data (default: 10)")
     shuffle_pack_args.add_argument("--preserve-data-order",
                                    default=False, action="store_true",
                                    help="Disables shuffling, so the input and output data have the same order.")
