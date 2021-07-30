@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
-    parser.add_argument("--output-dir", type=str, default="", help="Output directory (default: directory)")
+    parser.add_argument("--output-dir", type=str, default="", help="Output directory (default: current directory)")
 
     cleaning_args = parser.add_argument_group('data cleaning arguments')
 
