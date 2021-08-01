@@ -242,7 +242,9 @@ def create_tfrecords(files, args):
             random.shuffle(sequences_for_this_epoch)
 
         if args.min_unique_tokens > 0:
-            sequences_for_this_epoch = list(enforce_min_unique(sequences_for_this_epoch, args.min_unique_tokens, enc, args.verbose))
+            full_seqs, trailing_data = sequences_for_this_epoch[:-1], sequences_for_this_epoch[-1]
+            sequences_for_this_epoch = list(enforce_min_unique(full_seqs, args.min_unique_tokens, enc, args.verbose))
+            sequences_for_this_epoch.append(trailing_data)
 
         all_sequences_across_epochs.extend(sequences_for_this_epoch)
 
