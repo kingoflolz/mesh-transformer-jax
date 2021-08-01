@@ -254,7 +254,6 @@ def create_tfrecords(files, args):
 
     print(type(all_sequences_across_epochs))
     print(type(all_sequences_across_epochs[0]))
-    print(type(all_sequences_across_epochs[0][0]))
 
     fp = os.path.join(args.output_dir, f"{args.name}_{total_sequence_len}.tfrecords")
     write_tfrecord(all_sequences_across_epochs, fp)
