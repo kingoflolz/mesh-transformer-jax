@@ -231,7 +231,7 @@ def create_tfrecords(files, args):
         else:
             random.shuffle(files)
 
-        print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\t{len(data_to_prepend)} tokens rolled over from last epoch\n\tfirst file this ep is {files[0]}')
+        print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\tfirst file this ep is {files[0]}')
 
         for f in tqdm(files, mininterval=10, smoothing=0):
             sequences_for_this_epoch.extend(file_to_chunks_generator(f, enc, args))
