@@ -160,9 +160,10 @@ def eot_splitting_generator(string_iterable, encoder):
     """
     Given strings, splits them internally on <|endoftext|> and yields (generally more) strings
     """
-    for d in doc.split(encoder.eos_token):
-        if len(d) > 0:
-            yield d
+    for doc in string_iterable:
+        for d in doc.split(encoder.eos_token):
+            if len(d) > 0:
+                yield d
 
 
 def prep_and_tokenize_generator(string_iterable, encoder, normalize_with_ftfy, normalize_with_wikitext_detokenize):
