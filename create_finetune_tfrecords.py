@@ -236,7 +236,7 @@ def create_tfrecords(files, args):
         print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\t{len(data_to_prepend)} tokens rolled over from last epoch\n\tfirst file this ep is {files[0]}')
 
         for f in tqdm(files, mininterval=10, smoothing=0):
-            for tokenized_files in archive_to_tokens(f, enc, args, prefix=data_to_prepend):
+            for tokenized_files in archive_to_tokens(f, enc, args):
                 # if the last chunk < chunk size, take it and append it to the beginning of the next file
                 data_to_prepend = []
                 n_tokens = len(tokenized_files[-1])
