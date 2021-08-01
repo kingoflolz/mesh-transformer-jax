@@ -212,45 +212,69 @@ def file_to_chunks_generator(file_path, encoder, args):
     return sequence_chunking_generator(token_list_gen)
 
 
+def read_files_to_sequences(files, args, encoder):
+    sequences_first_epoch = []
+
+    if args.preserve_data_order:
+        files = sorted(files)
+    else:
+        random.shuffle(files)
+
+    for f in tqdm(files, mininterval=10, smoothing=0):
+        sequences_first_epoch.extend(file_to_chunks_generator(f, encoder, args))
+
+    return sequences_first_epoch
+
+
+def postprocess_sequences(sequences, args, encoder):
+    sequences = list(sequence_chunking_generator(sequences))
+
+    full_seqs, trailing_data = sequences[:-1], sequences[-1]
+
+    if args.min_unique_tokens > 0:
+        full_seqs = list(enforce_min_unique(full_seqs, args.min_unique_tokens, encoder, args.verbose))
+
+    if not args.preserve_data_order:
+        random.shuffle(full_seqs)
+
+    return full_seqs, trailing_data
+
+
 def create_tfrecords(files, args):
     GPT2TokenizerFast.max_model_input_sizes['gpt2'] = 1e20  # disables a misleading warning
-    enc = GPT2TokenizerFast.from_pretrained('gpt2')
+    encoder = GPT2TokenizerFast.from_pretrained('gpt2')
 
     random.seed(args.seed)
 
-    data_to_prepend = []
     all_sequences_across_epochs = []
 
-    ep_len = None
+    sequences_first_epoch = read_files_to_sequences(files, args, encoder)
 
-    for ep_ix in range(args.n_repack_epochs):
-        sequences_for_this_epoch = []
+    full_seqs, trailing_data = postprocess_sequences(sequences_first_epoch, args, encoder)
 
-        if args.preserve_data_order:
-            files = sorted(files)
-        else:
-            random.shuffle(files)
+    # sequences_first_epoch = list(sequence_chunking_generator(sequences_first_epoch))
+    #
+    # full_seqs_first_epoch, trailing_data_first_epoch = sequences_first_epoch[:-1], sequences_first_epoch[-1]
+    #
+    # if args.min_unique_tokens > 0:
+    #     full_seqs_first_epoch = list(enforce_min_unique(full_seqs_first_epoch, args.min_unique_tokens, enc, args.verbose))
+    #
+    # if not args.preserve_data_order:
+    #     random.shuffle(full_seqs_first_epoch)
 
-        print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\tfirst file this ep is {files[0]}')
+    all_sequences_across_epochs.extend(full_seqs)
 
-        for f in tqdm(files, mininterval=10, smoothing=0):
-            sequences_for_this_epoch.extend(file_to_chunks_generator(f, enc, args))
-
-        sequences_for_this_epoch = list(sequence_chunking_generator(sequences_for_this_epoch))
-
+    # ep 2+
+    for ep_ix in range(1, args.n_repack_epochs):
+        # re-shuffle
         if not args.preserve_data_order:
-            random.shuffle(sequences_for_this_epoch)
+            random.shuffle(full_seqs)
 
-        if args.min_unique_tokens > 0:
-            full_seqs, trailing_data = sequences_for_this_epoch[:-1], sequences_for_this_epoch[-1]
-            sequences_for_this_epoch = list(enforce_min_unique(full_seqs, args.min_unique_tokens, enc, args.verbose))
-            sequences_for_this_epoch.append(trailing_data)
+        sequences_this_epoch = [trailing_data] + full_seqs
+        full_seqs, trailing_data = postprocess_sequences(sequences_this_epoch, args, encoder)
+        all_sequences_across_epochs.extend(full_seqs)
 
-        all_sequences_across_epochs.extend(sequences_for_this_epoch)
-
-        if ep_ix == 0:
-            ep_len = len(sequences_for_this_epoch)
-
+    # final
     all_sequences_across_epochs = list(sequence_chunking_generator(all_sequences_across_epochs))
 
     final_seq_len = len(all_sequences_across_epochs[-1])
