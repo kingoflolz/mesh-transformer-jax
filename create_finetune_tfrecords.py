@@ -45,11 +45,6 @@ def parse_args():
     minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value. (Default: 0)"
     cleaning_args.add_argument("--min-unique-tokens", type=int, default=0,
                                help=minu_help)
-    eot_text_help = "Treats the string '<|endoftext|>' inside files as text rather than a document separator."
-    eot_text_help += " Not appropriate if your dataset is already concatenate on '<|endoftext|>'."
-    cleaning_args.add_argument("--treat-eot-as-text",
-                               default=False, action="store_true",
-                               help=eot_text_help)
 
     shuffle_pack_args = parser.add_argument_group('data shuffling/packing arguments')
     repack_ep_help = "Repeat the data N_REPACK_EPOCHS times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
@@ -207,8 +202,7 @@ def file_to_chunks_generator(file_path, encoder, args):
     """
     reader = Reader(file_path)
     string_iterable = reader.stream_data(threaded=False)
-    if not args.treat_eot_as_text:
-        string_iterable = eot_splitting_generator(string_iterable, encoder)
+    string_iterable = eot_splitting_generator(string_iterable, encoder)
 
     token_list_gen = prep_and_tokenize_generator(string_iterable,
                                                  encoder,
@@ -254,7 +248,6 @@ def create_tfrecords(files, args):
 
         if ep_ix == 0:
             ep_len = len(sequences_for_this_epoch)
-
 
     all_sequences_across_epochs = list(sequence_chunking_generator(all_sequences_across_epochs))
 
