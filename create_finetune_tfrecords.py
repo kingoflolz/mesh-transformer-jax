@@ -121,7 +121,7 @@ def write_to_file(writer, data):
     """
     writes data to tfrecord file
     """
-    print(("data", data))
+    print(("data", len(data)))
     feature = {
         "text": _int64_feature(data)
     }
@@ -235,6 +235,8 @@ def create_tfrecords(files, args):
 
         for f in tqdm(files, mininterval=10, smoothing=0):
             sequences_for_this_epoch.extend(archive_to_tokens(f, enc, args))
+
+        sequences_for_this_epoch = list(sequence_generator(sequences_for_this_epoch))
 
         if not args.preserve_data_order:
             random.shuffle(sequences_for_this_epoch)
