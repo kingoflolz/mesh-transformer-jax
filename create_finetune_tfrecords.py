@@ -76,6 +76,13 @@ def parse_args():
     return args
 
 
+def get_files(input_dir):
+    filetypes = ["jsonl.zst", ".txt", ".xz", ".tar.gz"]
+    files = [list(Path(input_dir).glob(f"*{ft}")) for ft in filetypes]
+    # flatten list of list -> list and stringify Paths
+    return [str(item) for sublist in files for item in sublist]
+
+
 def wikitext_detokenizer(string):
     # contractions
     string = string.replace("s '", "s'")
@@ -149,14 +156,20 @@ def enforce_min_unique(seqs, min_unique_tokens, enc, verbose=False):
             print(f"excluding with {len(set(seq))} unique tokens:\n\n{repr(text)}\n\n")
 
 
-def split_on_interior_eot(doc, encoder, disable=False):
-    if disable:
-        return [doc]
-    return [d for d in doc.split(encoder.eos_token) if d]
+def eot_splitting_generator(string_iterable, encoder):
+    """
+    Given strings, splits them internally on <|endoftext|> and yields (generally more) strings
+    """
+    for d in doc.split(encoder.eos_token):
+        if len(d) > 0:
+            yield d
 
 
-def prep_and_tokenize_generator(list_of_strings, encoder, normalize_with_ftfy, normalize_with_wikitext_detokenize):
-    for doc in list_of_strings:
+def prep_and_tokenize_generator(string_iterable, encoder, normalize_with_ftfy, normalize_with_wikitext_detokenize):
+    """
+    Given strings, does data cleaning / tokenization and yields arrays of tokens
+    """
+    for doc in string_iterable:
         if normalize_with_ftfy:  # fix text with ftfy if specified
             doc = ftfy.fix_text(doc, normalization='NFKC')
         if normalize_with_wikitext_detokenize:
@@ -165,9 +178,14 @@ def prep_and_tokenize_generator(list_of_strings, encoder, normalize_with_ftfy, n
         yield tokens
 
 
-def sequence_generator(lists_of_tokens, sequence_length=2049):
+def sequence_chunking_generator(token_list_iterable, sequence_length=2049):
+    """
+    Given token arrays of arbitrary lengths, concats/splits them into arrays of equal length
+
+    Yields equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
+    """
     accum = []
-    for l in lists_of_tokens:
+    for l in token_list_iterable:
         accum.extend(l)
 
         if len(accum) > sequence_length:
@@ -180,36 +198,23 @@ def sequence_generator(lists_of_tokens, sequence_length=2049):
         yield accum
 
 
-def archive_to_tokens(f, encoder, args):
-    reader = Reader(f)
-    token_list_gen = prep_and_tokenize_generator(reader.stream_data(threaded=False),
+def file_to_chunks_generator(file_path, encoder, args):
+    """
+    Given a file path, reads the file and tokenizes the contents
+
+    Yields equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
+    """
+    reader = Reader(file_path)
+    string_iterable = reader.stream_data(threaded=False)
+    if not args.treat_eot_as_text:
+        string_iterable = eot_splitting_generator(string_iterable, encoder)
+
+    token_list_gen = prep_and_tokenize_generator(string_iterable,
                                                  encoder,
                                                  normalize_with_ftfy=args.normalize_with_ftfy,
                                                  normalize_with_wikitext_detokenize=args.normalize_with_wikitext_detokenize
                                                  )
-    return sequence_generator(token_list_gen)
-
-
-def old_archive_to_tokens(f, encoder, args, prefix=[]):
-    # Generator that yields the contents of the files in an archive
-    # if data_to_prepend is not None, prepend data_to_prepend + a EOS separator to the encoded data
-    reader = Reader(f)
-    for file_doc in reader.stream_data(threaded=False):
-        for doc in split_on_interior_eot(file_doc, encoder, disable=args.treat_eot_as_text):
-            if args.normalize_with_ftfy:  # fix text with ftfy if specified
-                doc = ftfy.fix_text(doc, normalization='NFKC')
-            if args.normalize_with_wikitext_detokenize:
-                doc = wikitext_detokenizer(doc)
-            doc = encoder.encode(doc) + [encoder.eos_token_id]  # read document from lmd and append separator token
-            yield split_list(prefix + doc, 2049)  # split into n_ctx + 1 size chunks
-            prefix = []
-
-
-def get_files(input_dir):
-    filetypes = ["jsonl.zst", ".txt", ".xz", ".tar.gz"]
-    files = [list(Path(input_dir).glob(f"*{ft}")) for ft in filetypes]
-    # flatten list of list -> list and stringify Paths
-    return [str(item) for sublist in files for item in sublist]
+    return sequence_chunking_generator(token_list_gen)
 
 
 def create_tfrecords(files, args):
@@ -234,9 +239,9 @@ def create_tfrecords(files, args):
         print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\t{len(data_to_prepend)} tokens rolled over from last epoch\n\tfirst file this ep is {files[0]}')
 
         for f in tqdm(files, mininterval=10, smoothing=0):
-            sequences_for_this_epoch.extend(archive_to_tokens(f, enc, args))
+            sequences_for_this_epoch.extend(file_to_chunks_generator(f, enc, args))
 
-        sequences_for_this_epoch = list(sequence_generator(sequences_for_this_epoch))
+        sequences_for_this_epoch = list(sequence_chunking_generator(sequences_for_this_epoch))
 
         if not args.preserve_data_order:
             random.shuffle(sequences_for_this_epoch)
@@ -249,10 +254,12 @@ def create_tfrecords(files, args):
         if ep_ix == 0:
             ep_len = len(sequences_for_this_epoch)
 
-    total_sequence_len = len(all_sequences_across_epochs)
+    final_seq_len = len(all_sequences_across_epochs[-1])
+    if final_seq_len < 2049:
+        print(f"dropped {final_seq_len} tokens of trailing data")
+        all_sequences_across_epochs = all_sequences_across_epochs[:-1]
 
-    print(type(all_sequences_across_epochs))
-    print(type(all_sequences_across_epochs[0]))
+    total_sequence_len = len(all_sequences_across_epochs)
 
     fp = os.path.join(args.output_dir, f"{args.name}_{total_sequence_len}.tfrecords")
     write_tfrecord(all_sequences_across_epochs, fp)
