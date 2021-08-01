@@ -30,8 +30,7 @@ def parse_args():
         - Why: the model's data loader ignores "trailing" data (< 1 batch) at the end of a .tfrecords file
             - this causes data loss if you have many .tfrecords files
         - This is probably not appropriate for very large datasets
-    """,
-    formatter_class=argparse.RawTextHelpFormatter)
+    """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
@@ -158,7 +157,42 @@ def split_on_interior_eot(doc, encoder, disable=False):
     return [d for d in doc.split(encoder.eos_token) if d]
 
 
-def archive_to_tokens(f, encoder, args, prefix=[]):
+def prep_and_tokenize_generator(list_of_strings, encoder, normalize_with_ftfy, normalize_with_wikitext_detokenize):
+    for doc in list_of_strings:
+        if normalize_with_ftfy:  # fix text with ftfy if specified
+            doc = ftfy.fix_text(doc, normalization='NFKC')
+        if normalize_with_wikitext_detokenize:
+            doc = wikitext_detokenizer(doc)
+        tokens = encoder.encode(doc) + [encoder.eos_token_id]
+        yield tokens
+
+
+def sequence_generator(lists_of_tokens, sequence_length=2049):
+    accum = []
+    for l in lists_of_tokens:
+        accum.extend(l)
+
+        if len(accum) > sequence_length:
+            chunks = split_list(accum, sequence_length)
+            for chunk in chunks[:-1]:
+                yield chunk
+            accum = chunks[-1]
+
+    if len(accum) > 0:
+        yield accum
+
+
+def archive_to_tokens(f, encoder, args):
+    reader = Reader(f)
+    token_list_gen = prep_and_tokenize_generator(reader.stream_data(threaded=False),
+                                                 encoder,
+                                                 normalize_with_ftfy=args.normalize_with_ftfy,
+                                                 normalize_with_wikitext_detokenize=args.normalize_with_wikitext_detokenize
+                                                 )
+    return sequence_generator(token_list_gen)
+
+
+def old_archive_to_tokens(f, encoder, args, prefix=[]):
     # Generator that yields the contents of the files in an archive
     # if data_to_prepend is not None, prepend data_to_prepend + a EOS separator to the encoded data
     reader = Reader(f)
@@ -192,7 +226,7 @@ def create_tfrecords(files, args):
     ep_len = None
 
     for ep_ix in range(args.n_repack_epochs):
-        tokenized_files_array = []
+        sequences_for_this_epoch = []
 
         if args.preserve_data_order:
             files = sorted(files)
@@ -210,18 +244,18 @@ def create_tfrecords(files, args):
                     data = tokenized_files.pop(-1)
                     data_to_prepend = data
 
-                tokenized_files_array.extend(tokenized_files)
+                sequences_for_this_epoch.extend(tokenized_files)
 
         if not args.preserve_data_order:
-            random.shuffle(tokenized_files_array)
+            random.shuffle(sequences_for_this_epoch)
 
         if args.min_unique_tokens > 0:
-            tokenized_files_array = list(enforce_min_unique(tokenized_files_array, args.min_unique_tokens, enc, args.verbose))
+            sequences_for_this_epoch = list(enforce_min_unique(sequences_for_this_epoch, args.min_unique_tokens, enc, args.verbose))
 
-        all_sequences_across_epochs.extend(tokenized_files_array)
+        all_sequences_across_epochs.extend(sequences_for_this_epoch)
 
         if ep_ix == 0:
-            ep_len = len(tokenized_files_array)
+            ep_len = len(sequences_for_this_epoch)
 
     total_sequence_len = len(all_sequences_across_epochs)
 
