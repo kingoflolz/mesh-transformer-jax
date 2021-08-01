@@ -174,11 +174,47 @@ def prep_and_tokenize_generator(string_iterable, encoder, normalize_with_ftfy, n
         yield tokens
 
 
-def sequence_chunking_generator(token_list_iterable, sequence_length=2049):
+def file_to_tokenized_docs_generator(file_path, encoder, args):
+    """
+    Given a file path, reads the file and tokenizes the contents
+
+    Yields token arrays of arbitrary, unequal length
+    """
+    reader = Reader(file_path)
+    string_iterable = reader.stream_data(threaded=False)
+    string_iterable = eot_splitting_generator(string_iterable, encoder)
+
+    token_list_gen = prep_and_tokenize_generator(string_iterable,
+                                                 encoder,
+                                                 normalize_with_ftfy=args.normalize_with_ftfy,
+                                                 normalize_with_wikitext_detokenize=args.normalize_with_wikitext_detokenize
+                                                 )
+    return token_list_gen
+
+
+def read_files_to_tokenized_docs(files, args, encoder):
+    docs = []
+
+    if args.preserve_data_order:
+        files = sorted(files)
+    else:
+        random.shuffle(files)
+
+    for f in tqdm(files, mininterval=10, smoothing=0):
+        docs.extend(file_to_tokenized_docs_generator(f, encoder, args))
+
+    if not args.preserve_data_order:
+        # shuffle at individual document level
+        random.shuffle(docs)
+
+    return docs
+
+
+def arrays_to_sequences(token_list_iterable, sequence_length=2049):
     """
     Given token arrays of arbitrary lengths, concats/splits them into arrays of equal length
 
-    Yields equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
+    Returns equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
     """
     accum = []
     for l in token_list_iterable:
@@ -194,40 +230,8 @@ def sequence_chunking_generator(token_list_iterable, sequence_length=2049):
         yield accum
 
 
-def file_to_chunks_generator(file_path, encoder, args):
-    """
-    Given a file path, reads the file and tokenizes the contents
-
-    Yields equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
-    """
-    reader = Reader(file_path)
-    string_iterable = reader.stream_data(threaded=False)
-    string_iterable = eot_splitting_generator(string_iterable, encoder)
-
-    token_list_gen = prep_and_tokenize_generator(string_iterable,
-                                                 encoder,
-                                                 normalize_with_ftfy=args.normalize_with_ftfy,
-                                                 normalize_with_wikitext_detokenize=args.normalize_with_wikitext_detokenize
-                                                 )
-    return sequence_chunking_generator(token_list_gen)
-
-
-def read_files_to_sequences(files, args, encoder):
-    sequences_first_epoch = []
-
-    if args.preserve_data_order:
-        files = sorted(files)
-    else:
-        random.shuffle(files)
-
-    for f in tqdm(files, mininterval=10, smoothing=0):
-        sequences_first_epoch.extend(file_to_chunks_generator(f, encoder, args))
-
-    return sequences_first_epoch
-
-
-def postprocess_sequences(sequences, args, encoder):
-    sequences = list(sequence_chunking_generator(sequences))
+def chunk_and_finalize(arrays, args, encoder):
+    sequences = list(arrays_to_sequences(arrays))
 
     full_seqs, trailing_data = sequences[:-1], sequences[-1]
 
@@ -248,9 +252,10 @@ def create_tfrecords(files, args):
 
     all_sequences_across_epochs = []
 
-    sequences_first_epoch = read_files_to_sequences(files, args, encoder)
+    docs = read_files_to_tokenized_docs(files, args, encoder)
 
-    full_seqs, trailing_data = postprocess_sequences(sequences_first_epoch, args, encoder)
+    full_seqs, trailing_data = chunk_and_finalize(docs, args, encoder)
+    print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     all_sequences_across_epochs.extend(full_seqs)
 
@@ -258,14 +263,17 @@ def create_tfrecords(files, args):
     for ep_ix in range(1, args.n_repack_epochs):
         # re-shuffle
         if not args.preserve_data_order:
-            random.shuffle(full_seqs)
+            random.shuffle(docs)
+            full_seqs, trailing_data = chunk_and_finalize(docs, args, encoder)
+        else:
+            # if we're preserving data order, we can still "repack" by shifting everything
+            # with the trailing data of the last epoch at the beginning
+            seqs_with_prefix = [trailing_data] + full_seqs
+            full_seqs, trailing_data = chunk_and_finalize(seqs_with_prefix, args, encoder)
 
-        sequences_this_epoch = [trailing_data] + full_seqs
-        full_seqs, trailing_data = postprocess_sequences(sequences_this_epoch, args, encoder)
         all_sequences_across_epochs.extend(full_seqs)
 
     # final
-    print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     total_sequence_len = len(all_sequences_across_epochs)
 
