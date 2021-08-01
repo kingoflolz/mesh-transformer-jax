@@ -123,7 +123,6 @@ def write_to_file(writer, data):
     """
     writes data to tfrecord file
     """
-    print(("data", len(data)))
     feature = {
         "text": _int64_feature(data)
     }
