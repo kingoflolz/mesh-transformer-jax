@@ -255,6 +255,9 @@ def create_tfrecords(files, args):
         if ep_ix == 0:
             ep_len = len(sequences_for_this_epoch)
 
+
+    all_sequences_across_epochs = list(sequence_chunking_generator(all_sequences_across_epochs))
+
     final_seq_len = len(all_sequences_across_epochs[-1])
     if final_seq_len < 2049:
         print(f"dropped {final_seq_len} tokens of trailing data")
