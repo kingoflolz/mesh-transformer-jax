@@ -255,7 +255,6 @@ def create_tfrecords(files, args):
     docs = read_files_to_tokenized_docs(files, args, encoder)
 
     full_seqs, trailing_data = chunk_and_finalize(docs, args, encoder)
-    print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     all_sequences_across_epochs.extend(full_seqs)
 
@@ -274,6 +273,7 @@ def create_tfrecords(files, args):
         all_sequences_across_epochs.extend(full_seqs)
 
     # final
+    print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     total_sequence_len = len(all_sequences_across_epochs)
 
