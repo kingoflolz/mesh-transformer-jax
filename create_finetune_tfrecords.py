@@ -237,13 +237,6 @@ def create_tfrecords(files, args):
 
         for f in tqdm(files, mininterval=10, smoothing=0):
             for tokenized_files in archive_to_tokens(f, enc, args):
-                # if the last chunk < chunk size, take it and append it to the beginning of the next file
-                data_to_prepend = []
-                n_tokens = len(tokenized_files[-1])
-                if n_tokens < 2049:
-                    data = tokenized_files.pop(-1)
-                    data_to_prepend = data
-
                 sequences_for_this_epoch.extend(tokenized_files)
 
         if not args.preserve_data_order:
