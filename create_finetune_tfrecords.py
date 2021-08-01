@@ -121,6 +121,7 @@ def write_to_file(writer, data):
     """
     writes data to tfrecord file
     """
+    print(("data", data))
     feature = {
         "text": _int64_feature(data)
     }
@@ -130,7 +131,8 @@ def write_to_file(writer, data):
 
 def write_tfrecord(sequences, fp):
     with tf.io.TFRecordWriter(fp) as writer:
-        write_to_file(writer, sequences)
+        for seq in sequences:
+            write_to_file(writer, seq)
 
 
 def split_list(l, n):
