@@ -128,13 +128,9 @@ def write_to_file(writer, data):
     writer.write(tf_example.SerializeToString())
 
 
-def write_tfrecord(files, fp):
-    chunks = files
-    files_per = len(files)
-
+def write_tfrecord(sequences, fp):
     with tf.io.TFRecordWriter(fp) as writer:
-        for f in files:
-            write_to_file(writer, f)
+        write_to_file(writer, sequences)
 
 
 def split_list(l, n):
