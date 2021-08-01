@@ -252,16 +252,6 @@ def create_tfrecords(files, args):
 
     full_seqs, trailing_data = postprocess_sequences(sequences_first_epoch, args, encoder)
 
-    # sequences_first_epoch = list(sequence_chunking_generator(sequences_first_epoch))
-    #
-    # full_seqs_first_epoch, trailing_data_first_epoch = sequences_first_epoch[:-1], sequences_first_epoch[-1]
-    #
-    # if args.min_unique_tokens > 0:
-    #     full_seqs_first_epoch = list(enforce_min_unique(full_seqs_first_epoch, args.min_unique_tokens, enc, args.verbose))
-    #
-    # if not args.preserve_data_order:
-    #     random.shuffle(full_seqs_first_epoch)
-
     all_sequences_across_epochs.extend(full_seqs)
 
     # ep 2+
@@ -275,8 +265,6 @@ def create_tfrecords(files, args):
         all_sequences_across_epochs.extend(full_seqs)
 
     # final
-    all_sequences_across_epochs = list(sequence_chunking_generator(all_sequences_across_epochs))
-
     print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     total_sequence_len = len(all_sequences_across_epochs)
