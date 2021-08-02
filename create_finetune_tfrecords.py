@@ -30,8 +30,7 @@ def parse_args():
         - Why: the model's data loader ignores "trailing" data (< 1 batch) at the end of a .tfrecords file
             - this causes data loss if you have many .tfrecords files
         - This is probably not appropriate for very large datasets
-    """,
-    formatter_class=argparse.RawTextHelpFormatter)
+    """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("input_dir", type=str, help="Path to where your files are located.")
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
@@ -46,11 +45,6 @@ def parse_args():
     minu_help += " Set <= 0 to disable. If enabled, 200 is a good default value. (Default: 0)"
     cleaning_args.add_argument("--min-unique-tokens", type=int, default=0,
                                help=minu_help)
-    eot_text_help = "Treats the string '<|endoftext|>' inside files as text rather than a document separator."
-    eot_text_help += " Not appropriate if your dataset is already concatenate on '<|endoftext|>'."
-    cleaning_args.add_argument("--treat-eot-as-text",
-                               default=False, action="store_true",
-                               help=eot_text_help)
 
     shuffle_pack_args = parser.add_argument_group('data shuffling/packing arguments')
     repack_ep_help = "Repeat the data N_REPACK_EPOCHS times, shuffled differently in each repetition. Recommended for multi-epoch training (set this to your intended number of epochs)."
@@ -75,6 +69,13 @@ def parse_args():
         args.input_dir = args.input_dir + "/"
 
     return args
+
+
+def get_files(input_dir):
+    filetypes = ["jsonl.zst", ".txt", ".xz", ".tar.gz"]
+    files = [list(Path(input_dir).glob(f"*{ft}")) for ft in filetypes]
+    # flatten list of list -> list and stringify Paths
+    return [str(item) for sublist in files for item in sublist]
 
 
 def wikitext_detokenizer(string):
@@ -129,13 +130,10 @@ def write_to_file(writer, data):
     writer.write(tf_example.SerializeToString())
 
 
-def write_tfrecord(files, fp):
-    chunks = files
-    files_per = len(files)
-
+def write_tfrecord(sequences, fp):
     with tf.io.TFRecordWriter(fp) as writer:
-        for f in files:
-            write_to_file(writer, f)
+        for seq in sequences:
+            write_to_file(writer, seq)
 
 
 def split_list(l, n):
@@ -152,76 +150,129 @@ def enforce_min_unique(seqs, min_unique_tokens, enc, verbose=False):
             print(f"excluding with {len(set(seq))} unique tokens:\n\n{repr(text)}\n\n")
 
 
-def split_on_interior_eot(doc, encoder, disable=False):
-    if disable:
-        return [doc]
-    return [d for d in doc.split(encoder.eos_token) if d]
+def eot_splitting_generator(string_iterable, encoder):
+    """
+    Given strings, splits them internally on <|endoftext|> and yields (generally more) strings
+    """
+    for doc in string_iterable:
+        for d in doc.split(encoder.eos_token):
+            if len(d) > 0:
+                yield d
 
 
-def archive_to_tokens(f, encoder, args, prefix=[]):
-    # Generator that yields the contents of the files in an archive
-    # if data_to_prepend is not None, prepend data_to_prepend + a EOS separator to the encoded data
-    reader = Reader(f)
-    for file_doc in reader.stream_data(threaded=False):
-        for doc in split_on_interior_eot(file_doc, encoder, disable=args.treat_eot_as_text):
-            if args.normalize_with_ftfy:  # fix text with ftfy if specified
-                doc = ftfy.fix_text(doc, normalization='NFKC')
-            if args.normalize_with_wikitext_detokenize:
-                doc = wikitext_detokenizer(doc)
-            doc = encoder.encode(doc) + [encoder.eos_token_id]  # read document from lmd and append separator token
-            yield split_list(prefix + doc, 2049)  # split into n_ctx + 1 size chunks
-            prefix = []
+def prep_and_tokenize_generator(string_iterable, encoder, normalize_with_ftfy, normalize_with_wikitext_detokenize):
+    """
+    Given strings, does data cleaning / tokenization and yields arrays of tokens
+    """
+    for doc in string_iterable:
+        if normalize_with_ftfy:  # fix text with ftfy if specified
+            doc = ftfy.fix_text(doc, normalization='NFKC')
+        if normalize_with_wikitext_detokenize:
+            doc = wikitext_detokenizer(doc)
+        tokens = encoder.encode(doc) + [encoder.eos_token_id]
+        yield tokens
 
 
-def get_files(input_dir):
-    filetypes = ["jsonl.zst", ".txt", ".xz", ".tar.gz"]
-    files = [list(Path(input_dir).glob(f"*{ft}")) for ft in filetypes]
-    # flatten list of list -> list and stringify Paths
-    return [str(item) for sublist in files for item in sublist]
+def file_to_tokenized_docs_generator(file_path, encoder, args):
+    """
+    Given a file path, reads the file and tokenizes the contents
+
+    Yields token arrays of arbitrary, unequal length
+    """
+    reader = Reader(file_path)
+    string_iterable = reader.stream_data(threaded=False)
+    string_iterable = eot_splitting_generator(string_iterable, encoder)
+
+    token_list_gen = prep_and_tokenize_generator(string_iterable,
+                                                 encoder,
+                                                 normalize_with_ftfy=args.normalize_with_ftfy,
+                                                 normalize_with_wikitext_detokenize=args.normalize_with_wikitext_detokenize
+                                                 )
+    return token_list_gen
+
+
+def read_files_to_tokenized_docs(files, args, encoder):
+    docs = []
+
+    if args.preserve_data_order:
+        files = sorted(files)
+    else:
+        random.shuffle(files)
+
+    for f in tqdm(files, mininterval=10, smoothing=0):
+        docs.extend(file_to_tokenized_docs_generator(f, encoder, args))
+
+    if not args.preserve_data_order:
+        # shuffle at individual document level
+        random.shuffle(docs)
+
+    return docs
+
+
+def arrays_to_sequences(token_list_iterable, sequence_length=2049):
+    """
+    Given token arrays of arbitrary lengths, concats/splits them into arrays of equal length
+
+    Returns equal-length token arrays, followed by a a final array of trailing tokens (which may be shorter)
+    """
+    accum = []
+    for l in token_list_iterable:
+        accum.extend(l)
+
+        if len(accum) > sequence_length:
+            chunks = split_list(accum, sequence_length)
+            for chunk in chunks[:-1]:
+                yield chunk
+            accum = chunks[-1]
+
+    if len(accum) > 0:
+        yield accum
+
+
+def chunk_and_finalize(arrays, args, encoder):
+    sequences = list(arrays_to_sequences(arrays))
+
+    full_seqs, trailing_data = sequences[:-1], sequences[-1]
+
+    if args.min_unique_tokens > 0:
+        full_seqs = list(enforce_min_unique(full_seqs, args.min_unique_tokens, encoder, args.verbose))
+
+    if not args.preserve_data_order:
+        random.shuffle(full_seqs)
+
+    return full_seqs, trailing_data
 
 
 def create_tfrecords(files, args):
     GPT2TokenizerFast.max_model_input_sizes['gpt2'] = 1e20  # disables a misleading warning
-    enc = GPT2TokenizerFast.from_pretrained('gpt2')
+    encoder = GPT2TokenizerFast.from_pretrained('gpt2')
 
     random.seed(args.seed)
 
-    data_to_prepend = []
     all_sequences_across_epochs = []
 
-    ep_len = None
+    docs = read_files_to_tokenized_docs(files, args, encoder)
 
-    for ep_ix in range(args.n_repack_epochs):
-        tokenized_files_array = []
+    full_seqs, trailing_data = chunk_and_finalize(docs, args, encoder)
 
-        if args.preserve_data_order:
-            files = sorted(files)
-        else:
-            random.shuffle(files)
+    all_sequences_across_epochs.extend(full_seqs)
 
-        print(f'starting epoch {ep_ix}\n\t{len(all_sequences_across_epochs)} sequences so far\n\t{len(data_to_prepend)} tokens rolled over from last epoch\n\tfirst file this ep is {files[0]}')
-
-        for f in tqdm(files, mininterval=10, smoothing=0):
-            for tokenized_files in archive_to_tokens(f, enc, args, prefix=data_to_prepend):
-                # if the last chunk < chunk size, take it and append it to the beginning of the next file
-                data_to_prepend = []
-                n_tokens = len(tokenized_files[-1])
-                if n_tokens < 2049:
-                    data = tokenized_files.pop(-1)
-                    data_to_prepend = data
-
-                tokenized_files_array.extend(tokenized_files)
-
+    # ep 2+
+    for ep_ix in range(1, args.n_repack_epochs):
+        # re-shuffle
         if not args.preserve_data_order:
-            random.shuffle(tokenized_files_array)
+            random.shuffle(docs)
+            full_seqs, trailing_data = chunk_and_finalize(docs, args, encoder)
+        else:
+            # if we're preserving data order, we can still "repack" by shifting everything
+            # with the trailing data of the last epoch at the beginning
+            seqs_with_prefix = [trailing_data] + full_seqs
+            full_seqs, trailing_data = chunk_and_finalize(seqs_with_prefix, args, encoder)
 
-        if args.min_unique_tokens > 0:
-            tokenized_files_array = list(enforce_min_unique(tokenized_files_array, args.min_unique_tokens, enc, args.verbose))
+        all_sequences_across_epochs.extend(full_seqs)
 
-        all_sequences_across_epochs.extend(tokenized_files_array)
-
-        if ep_ix == 0:
-            ep_len = len(tokenized_files_array)
+    # final
+    print(f"dropped {len(trailing_data)} tokens of trailing data")
 
     total_sequence_len = len(all_sequences_across_epochs)
 
