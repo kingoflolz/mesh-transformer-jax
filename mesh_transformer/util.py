@@ -26,7 +26,7 @@ def gpt3_schedule(warmup_steps,
     return sch
 
 
-def global_norm(updates):
+def global_norm(updates, use_psum=True):
     pre_sqrt = sum([jnp.sum(jnp.square(x)) for x in jax.tree_leaves(updates)])
     pre_sqrt = jax.lax.psum(pre_sqrt, "shard")
     return jnp.sqrt(pre_sqrt)
@@ -36,7 +36,7 @@ class ClipByGlobalNormState(OptState):
     """The `clip_by_global_norm` transformation is stateless."""
 
 
-def clip_by_global_norm(max_norm) -> GradientTransformation:
+def clip_by_global_norm(max_norm, use_psum=True) -> GradientTransformation:
     """Clip updates using their global norm.
 
     References:
@@ -54,7 +54,7 @@ def clip_by_global_norm(max_norm) -> GradientTransformation:
 
     def update_fn(updates, state, params=None):
         del params
-        g_norm = global_norm(updates)
+        g_norm = global_norm(updates, use_psum=use_psum)
         trigger = g_norm < max_norm
         updates = jax.tree_map(
             lambda t: jnp.where(trigger, t, (t / g_norm) * max_norm), updates)
