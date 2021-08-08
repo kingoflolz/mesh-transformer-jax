@@ -135,6 +135,7 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
         shards = list((p.imap(read_shard, [f"{dir}shard_{i}/" for i in range(shards_in)])))
         print(f"read from disk/gcs in {time.time() - start:.06}s")
 
+    def _unshard(shards, old_flattened):
         unsharded = []
 
         for old, *all_shards in zip(old_flattened, *shards):
@@ -148,6 +149,14 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
             unsharded.append(x)
 
             assert x.shape == old.shape, f"Incompatible checkpoints {x.shape} vs {old.shape}"
+        return unsharded
+    try:
+        unsharded = _unshard(shards, old_flattened)
+    except AssertionError:
+        load_opt = False  # no opt to load in ckpt
+        del pytree['opt_state']
+        old_flattened, structure = jax.tree_flatten(pytree)
+        unsharded = _unshard(shards, old_flattened)
 
     loaded_pytree = jax.tree_unflatten(structure, unsharded)
 
