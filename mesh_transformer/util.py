@@ -28,7 +28,8 @@ def gpt3_schedule(warmup_steps,
 
 def global_norm(updates, use_psum=True):
     pre_sqrt = sum([jnp.sum(jnp.square(x)) for x in jax.tree_leaves(updates)])
-    pre_sqrt = jax.lax.psum(pre_sqrt, "shard")
+    if use_psum:
+        pre_sqrt = jax.lax.psum(pre_sqrt, "shard")
     return jnp.sqrt(pre_sqrt)
 
 
