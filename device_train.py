@@ -341,7 +341,7 @@ if __name__ == "__main__":
 
             # compute G_noise and S_noise
             # from "An Empirical Model of Large-Batch Training" Appendix A.1
-            # here, B_large = gradient_accumulation_steps, and B_small = 1 for convenience
+            # here, B_big = gradient_accumulation_steps, and B_small = 1 for convenience
             gbsmall = grad_norm_micro ** 2
             gbbig = grad_norm ** 2
             G_noise = (gradient_accumulation_steps * gbbig - gbsmall) / (
