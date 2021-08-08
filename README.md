@@ -128,7 +128,7 @@ program handles data loading and general orchestration (such as when to save che
 This means that most scripts (`train.py`, `eval_harness.py` etc) expect to be running on a GCE virtual machine in the
 same region as the TPUs, to minimize RPC latency and data transfer cost. Other scripts
 (usually ones which don't take a `--tpu` argument, such as `device_sample.py`, `device_serve.py` or `device_train.py`)
-expect to be run directly on a TPUVM.
+expect to be run directly on a TPUVM. The device_* scripts **only work on a v3-8** and not on larger pods.
 
 Furthermore, there is an example (`resharding_example.py`) of how to convert the provided checkpoints (which have 8
 shards in the case of GPT-J-6B) down to a smaller number, such as for when running on GPU(s).
