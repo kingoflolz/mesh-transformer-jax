@@ -276,11 +276,6 @@ if __name__ == "__main__":
         loss, last_loss, grad_norm, grad_norm_micro = train_step(
             network, train_dataset.get_samples()
         )
-        print(("loss", loss))
-        print(("last_loss", last_loss))
-        print(("grad_norm", grad_norm))
-        print(("grad_norm / gradient_accumulation_steps", grad_norm / gradient_accumulation_steps))
-        print(("grad_norm_micro", grad_norm_micro))
         step += 1
         print(f"Train fn compiled in {time.time() - start:.06}s")
 
