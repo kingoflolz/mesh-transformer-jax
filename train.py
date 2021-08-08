@@ -26,6 +26,7 @@ def parse_args():
                                                            "starts a new training run")
 
     parser.add_argument("--version", type=int, default=1, help="Choose which model version to use")
+    parser.add_argument("--wandb_project", type=str, default="mesh-transformer-jax", help="W&B project name")
 
     args = parser.parse_args()
     return args
@@ -118,7 +119,7 @@ if __name__ == "__main__":
         t.eval(val_set.get_samples())
     print(f"Eval fn compiled in {time.time() - start:.06}s")
 
-    wandb.init(project='mesh-transformer-jax', entity="eleutherai", name=params["name"], config=params)
+    wandb.init(project=params["wandb_project"], entity="eleutherai", name=params["name"], config=params)
 
     eval_task_dict = tasks.get_task_dict(eval_tasks)
 
