@@ -14,7 +14,7 @@ from jax.experimental.pjit import pjit
 from mesh_transformer.checkpoint import read_ckpt, write_ckpt, write_ckpt_v2, load_ckpt_v2
 from mesh_transformer.layers import EmbeddingShard, TransformerLayerShard, RelativePositionEmbs, ProjectionShard, \
     TransformerLayerShardV2, Projection, EmbeddingShardV2
-from mesh_transformer.util import to_f32, to_bf16, maybe_shard, head_print
+from mesh_transformer.util import to_f32, to_bf16, maybe_shard, head_print, global_norm
 from jax.experimental import PartitionSpec as P
 
 
@@ -147,24 +147,29 @@ class CausalTransformer:
                 (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx, tgt)
 
                 new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
-                return new_grad, (loss, last_loss)
+                gnorm = global_norm(grad)
+                return new_grad, (loss, last_loss, gnorm)
 
             if ctx.shape[0] == 1:
                 val_grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
                 (loss, last_loss), grad = val_grad_fn(to_bf16(state["params"]), ctx[0], tgt[0])
+                gnorm = global_norm(grad)
             else:
-                grad, (loss, last_loss) = jax.lax.scan(microbatch,
+                grad, (loss, last_loss, gnorm) = jax.lax.scan(microbatch,
                                                        jax.tree_map(lambda x: jnp.zeros_like(x).astype(jnp.bfloat16),
                                                                     state["params"]),
                                                        (ctx, tgt))
 
+            grad_norm_micro = jax.lax.pmean(gnorm, "batch")
+
             grad = jax.lax.pmean(grad, "batch")
+            grad_norm = global_norm(grad)
             updates, new_opt_state = optimizer.update(grad, state["opt_state"], state["params"])
 
-            return to_f32(loss), to_f32(last_loss), {
+            return to_f32(loss), to_f32(last_loss), to_f32(grad_norm), to_f32(grad_norm_micro), {
                 "params": optax.apply_updates(state["params"], to_f32(updates)),
                 "step": state["step"] + 1,
-                "opt_state": new_opt_state,
+                "opt_state": new_opt_state
             }
 
         def init(key, x):
@@ -228,7 +233,7 @@ class CausalTransformer:
                                                      in_axes=(["shard", ...],
                                                               ["batch", ...],
                                                               ["batch", ...]),
-                                                     out_axes=(["batch", ...], ["batch", ...], ["shard", ...]),
+                                                     out_axes=(["batch", ...], ["batch", ...], ["batch", ...], ["batch", ...], ["shard", ...]),
                                                      donate_argnums=(0,),
                                                      axis_resources={'shard': 'mp', 'batch': 'dp'})
 
@@ -293,11 +298,12 @@ class CausalTransformer:
         # assert (sample["obs"][:, 1:] == sample["target"][:, -1])
 
         # start = time.time()
-        loss, last_loss, self.state = self.train_xmap(self.state, obs, target)
+        loss, last_loss, grad_norm, grad_norm_micro, self.state = self.train_xmap(self.state, obs, target)
         loss = np.array(loss)
         last_loss = np.array(last_loss)
+        grad_norm = np.array(grad_norm)
         # print(f"iter done in {time.time() - start:.06}s")
-        return loss.mean(), last_loss.mean()
+        return loss.mean(), last_loss.mean(), grad_norm.mean(), grad_norm_micro.mean()
 
     def eval(self, sample):
         # print("eval sample", sample["obs"].shape)
