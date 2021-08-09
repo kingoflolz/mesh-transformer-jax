@@ -31,6 +31,8 @@ def parse_args():
         - set `tpu_size` to 8 (if on a v3-8)
         - set `warmup_steps`, `anneal_steps`, `lr`, `end_lr` to the lr schedule for your finetuning run
         - the global step will reset to 0, keep that in mind when writing your lr schedule
+        - set `name` to specify the name of the Weights & Biases run
+        - set `wandb_project` to specify the Weights & Biases project to log to
     To prepare data in the expected data format:
         - use the script `create_finetune_tfrecords.py` in this repo to create data in the expected format
         - upload the .tfrecords files to GCS
@@ -40,7 +42,6 @@ def parse_args():
     parser.add_argument("--config", type=str, default=None, help="Config file location")
     parser.add_argument("--tune-model-path", type=str, default=None, help="Base model to finetune")
     parser.add_argument("--fresh-opt", default=False, action="store_true", help="Use a newly initialized optimizer, ignoring any optimizer state saved in the base checkpoint")
-    parser.add_argument("--wandb-project", type=str, default="mesh-transformer-jax", help="Weights & Biases project name")
 
     args = parser.parse_args()
     return args
@@ -289,7 +290,8 @@ if __name__ == "__main__":
             val_set.reset()
         print(f"Eval fn compiled in {time.time() - start:.06}s")
 
-        wandb.init(project=params["wandb_project"], name=params["name"], config=params)
+        project = params.get("wandb_project", "mesh-transformer-jax")
+        wandb.init(project=project, name=params["name"], config=params)
 
         G_noise_avg = None
         S_noise_avg = None
