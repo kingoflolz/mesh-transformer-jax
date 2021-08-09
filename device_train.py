@@ -388,7 +388,8 @@ if __name__ == "__main__":
                 "train/steps_per_sec": steps_per_sec,
                 "train/tokens_per_sec": tokens_per_sec,
                 "train/grad_norm": grad_norm,
-                "train/learning_rate": float(scheduler(step)),
+                "train/learning_rate": float(scheduler(network.state["opt_state"][-1].count[0].item())),
+                "train/learning_rate_old": float(scheduler(step)),
                 "sequences_processed": sequences_processed,
                 "tokens_processed": tokens_processed,
             }
