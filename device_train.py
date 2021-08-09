@@ -110,9 +110,14 @@ def train_step(network, data):
         "target": data[:, :, 1:],
     }
 
-    loss, last_loss = network.train(inputs)
+    loss, last_loss, grad_norm, grad_norm_micro = network.train(inputs)
 
-    return np.array(loss).mean(), np.array(last_loss).mean()
+    return (
+        np.array(loss).mean(),
+        np.array(last_loss).mean(),
+        np.array(grad_norm).mean(),
+        np.array(grad_norm_micro).mean(),
+    )
 
 
 def eval_step(network, data):
@@ -161,6 +166,9 @@ if __name__ == "__main__":
     lr = params["lr"]
     end_lr = params["end_lr"]
     weight_decay = params["weight_decay"]
+   
+    # alpha parameter for the exponential moving averages used to compute B_simple
+    noise_scale_alpha = params.get("noise_scale_alpha", 0.01)
 
     scheduler = util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr)
     
@@ -235,14 +243,14 @@ if __name__ == "__main__":
 
     val_sets = {}
 
-    for k, v in params['val_set'].items():
-        val_sets[k] = TFRecordNewInputs(f"data/{v}",
-                                        batch_size=(global_val_batch,),
-                                        sample_size=seq)
+    for k, v in params["val_set"].items():
+        val_sets[k] = TFRecordNewInputs(
+            f"data/{v}", batch_size=(global_val_batch,), sample_size=seq
+        )
 
     # tok/sec metrics
-    windows_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
-    tokens_per_step = params['seq'] * windows_per_step
+    sequences_per_step = gradient_accumulation_steps * (per_replica_batch * tpu_size // cores_per_replica)
+    tokens_per_step = params['seq'] * sequences_per_step
 
     # load + run
     with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
@@ -268,7 +276,9 @@ if __name__ == "__main__":
 
         print('compiling train fn')
         start = time.time()
-        train_step(network, train_dataset.get_samples())
+        loss, last_loss, grad_norm, grad_norm_micro = train_step(
+            network, train_dataset.get_samples()
+        )
         step += 1
         print(f"Train fn compiled in {time.time() - start:.06}s")
 
@@ -280,6 +290,9 @@ if __name__ == "__main__":
         print(f"Eval fn compiled in {time.time() - start:.06}s")
 
         wandb.init(project=params["wandb_project"], name=params["name"], config=params)
+
+        G_noise_avg = None
+        S_noise_avg = None
 
         while True:
             if (step % ckpt_every == 1) or step == total_steps:
@@ -309,14 +322,76 @@ if __name__ == "__main__":
                 exit()
 
             start = time.time()
-            loss, last_loss = train_step(network, train_dataset.get_samples())
+            loss, last_loss, grad_norm, grad_norm_micro = train_step(
+                network, train_dataset.get_samples()
+            )
             step += 1
 
             steps_per_sec = 1 / (time.time() - start)
             tokens_per_sec = tokens_per_step * steps_per_sec
+            sequences_processed = sequences_per_step * step
+            tokens_processed = tokens_per_step * step
 
-            wandb.log({'train/loss': loss, 
-                'train/last_loss': last_loss, 
-                'train/steps_per_sec': steps_per_sec, 
-                'train/tokens_per_sec': tokens_per_sec,
-                'train/learning_rate': float(scheduler(step))}, step)
+            ### compute summary stats about the gradient
+
+            # converts from grads-summed-over-microbatch (what `CasualTransformer.train` computes)
+            # to grads-averaged-over-microbatch (what we want)
+            #
+            # (when taking gradient steps, the same conversion happens inside the optimizer
+            #  via optax.scale(1 / gradient_accumulation_steps))
+            grad_norm = grad_norm / gradient_accumulation_steps
+
+            # compute G_noise and S_noise
+            # from "An Empirical Model of Large-Batch Training" Appendix A.1
+            # here, B_big = gradient_accumulation_steps, and B_small = 1 for convenience
+            gbsmall = grad_norm_micro ** 2
+            gbbig = grad_norm ** 2
+            G_noise = (gradient_accumulation_steps * gbbig - gbsmall) / (
+                gradient_accumulation_steps - 1
+            )
+            S_noise = (gbsmall - gbbig) / (1 - 1 / gradient_accumulation_steps)
+
+            noise_scale_stats = {
+                "noise/G_noise": G_noise,
+                "noise/S_noise": S_noise,
+            }
+
+            # heuristic to avoid reporting G_noise in very early training when gradients are large
+            # (these take a long time to wash out of the moving average that defines B_simple)
+            use_step_in_noise_avgs = gbbig < 2
+
+            if use_step_in_noise_avgs:
+                # compute moving averages of G_noise and S_noise, for B_simple
+                if G_noise_avg is None:
+                    G_noise_avg = G_noise
+                else:
+                    G_noise_avg = (1 - noise_scale_alpha) * G_noise_avg + noise_scale_alpha * G_noise
+
+                if S_noise_avg is None:
+                    S_noise_avg = S_noise
+                else:
+                    S_noise_avg = (1 - noise_scale_alpha) * S_noise_avg + noise_scale_alpha * S_noise
+
+                B_simple = S_noise_avg / G_noise_avg
+
+                noise_scale_stats.update(
+                    {
+                        "noise/G_noise_avg": G_noise_avg,
+                        "noise/S_noise_avg": S_noise_avg,
+                        "noise/B_simple": B_simple,
+                    }
+                )
+
+            wandb_stats = {
+                "train/loss": loss,
+                "train/last_loss": last_loss,
+                "train/steps_per_sec": steps_per_sec,
+                "train/tokens_per_sec": tokens_per_sec,
+                "train/grad_norm": grad_norm,
+                "train/learning_rate": float(scheduler(step)),
+                "sequences_processed": sequences_processed,
+                "tokens_processed": tokens_processed,
+            }
+            wandb_stats.update(noise_scale_stats)
+
+            wandb.log(wandb_stats, step)

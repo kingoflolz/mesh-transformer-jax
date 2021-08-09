@@ -39,7 +39,7 @@ def build_model(params, tpu_name, region, preemptible, version=1):
 
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
-        clip_by_global_norm(1),
+        clip_by_global_norm(1, use_psum=(version == 1)),
         optax.scale_by_adam(),
         additive_weight_decay(weight_decay),
         optax.scale(-1),

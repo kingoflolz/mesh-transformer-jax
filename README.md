@@ -128,7 +128,7 @@ program handles data loading and general orchestration (such as when to save che
 This means that most scripts (`train.py`, `eval_harness.py` etc) expect to be running on a GCE virtual machine in the
 same region as the TPUs, to minimize RPC latency and data transfer cost. Other scripts
 (usually ones which don't take a `--tpu` argument, such as `device_sample.py`, `device_serve.py` or `device_train.py`)
-expect to be run directly on a TPUVM.
+expect to be run directly on a TPUVM. The device_* scripts **only work on a v3-8** and not on larger pods.
 
 Furthermore, there is an example (`resharding_example.py`) of how to convert the provided checkpoints (which have 8
 shards in the case of GPT-J-6B) down to a smaller number, such as for when running on GPU(s).
@@ -140,6 +140,13 @@ tokens/second, which should be sufficient for small-to-medium-size datasets.
 
 Please read the [step by step guide](howto_finetune.md) for thorough fine-tuning instructions.
 
+### JAX Dependency
+
+Note this library has some specific requirements for JAX version. Specifically, to use the v1 models (including
+ GPT-J 6B), `jax==0.2.12` is required. This in turn depends on `jaxlib==0.1.68`. **If this is not done, you will get
+cryptic xmap errors**
+
+However, to use the v2 model code (no publicly released weights), the newest JAX version can be used.
 # Citation
 
 To cite this repository:
