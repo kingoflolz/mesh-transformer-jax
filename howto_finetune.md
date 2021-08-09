@@ -56,6 +56,11 @@ This guide is labeled "The Basics", anything we haven't covered so far is out of
 
 The first thing you want to determine is how long a training epoch will be. `gradient_accumulation_steps` is your batch size, it defaults to `16`, nostalgebraist recommends `32`. Your .tfrecord files should have a number in the file name indicating how many sequences are in the dataset. Divide that number by the batch size and the result is how many steps are in an epoch. Now we can write the schedule.
 
-`lr` is recommended to be between `1e-5` and `5e-5`, with `end_lr` set to 1/5 or 1/10 of `lr`. `weight_decay` can remain `0.1`. `total_steps` should be at least one epoch, longer if you have a validation set to determine your training loss with. `warmup_steps` should be 5-10% of total, and finally `anneal_steps` should be `total_steps - warmup_steps`.
+`lr` is recommended to be between `1e-5` and `5e-5`, with `end_lr` set to 1/5 or 1/10 of `lr`.
+`weight_decay` can remain `0.1`. `total_steps` should be at least one epoch, possibly longer if you have a validation
+set to determine your training loss with.
+`warmup_steps` should be 5-10% of total, and finally `anneal_steps` should be `total_steps - warmup_steps`.
+(The `lr` is set to `end_lr` after `warmup_steps+anneal_steps` and then keeps training until `total_steps`,
+but usually you should stop after annealing is done)
 
 To illustrate: I have a small dataset that tokenized into 1147 sequences as a .tfrecord. Dividing by `gradient_accumulation_steps` set to `16`, rounding up to ensure I use all the data, equals 72 steps per epoch. I'll set `lr` to `5e-5`, `end_lr` to a fifth of that, `1e-5`; that may be too much, it's on the high end of the recommended range. I'll set `total_steps` to `72` for one epoch, since I don't have a validation set. Then I'll set `anneal_steps` to `65` and `warmup_steps` to `7`. Simple as that, but you may need to fiddle with the specifics on your own.
