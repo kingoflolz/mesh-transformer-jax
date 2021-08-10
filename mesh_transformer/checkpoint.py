@@ -141,7 +141,7 @@ def read_ckpt(pytree, dir, shards_in):
     device_index = 0
     for file_index in range(pieces):
         print(f"read_ckpt {file_index}.npz")
-        array_keys = np.load(f"{dir}shard_0/{file_index}.npz").keys()
+        array_keys = [*np.load(f"{dir}shard_0/{file_index}.npz").keys()]
         for array_index in range(len(array_keys)):
             unstacked = []
             for shard_index in range(shards_in):
