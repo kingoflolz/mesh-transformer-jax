@@ -131,47 +131,29 @@ def reshard(x, old_shape):
     return out
 
 
-def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
-    if shards_out is None:
-        shards_out = shards_in
-
+def read_ckpt(pytree, dir, shards_in):
     old_flattened, structure = jax.tree_flatten(pytree)
 
-    original_opt_state = pytree["opt_state"]
-
-    # TODO: figure out how to use a process pool here for more speed
-    with multiprocessing.pool.ThreadPool(shards_in) as p:
-        start = time.time()
-        shards = list((p.imap(read_shard, [f"{dir}shard_{i}/" for i in range(shards_in)])))
-        print(f"read from disk/gcs in {time.time() - start:.06}s")
-
-    def _unshard(shards, old_flattened):
-        unsharded = []
-
-        for old, *all_shards in zip(old_flattened, *shards):
-            x = np.stack(all_shards)
-            # No idea why this is V2...?
-            if x.dtype == np.dtype('V2'):
-                x.dtype = jnp.bfloat16
-
-            if shards_out != shards_in:
-                x = reshard(x, old.shape)
-            unsharded.append(x)
-
-            assert x.shape == old.shape, f"Incompatible checkpoints {x.shape} vs {old.shape}"
-        return unsharded
-    try:
-        unsharded = _unshard(shards, old_flattened)
-    except AssertionError:
-        load_opt = False  # no opt to load in ckpt
-        del pytree['opt_state']
-        old_flattened, structure = jax.tree_flatten(pytree)
-        unsharded = _unshard(shards, old_flattened)
+    start = time.time()
+    unsharded = []
+    devices = jax.devices()
+    device_count = jax.device_count()
+    for file_index in range(16):
+        print(f"read_ckpt {file_index}.npz")
+        for array_index in range(18):
+            if file_index == 15 and array_index == 17:
+                break
+            unstacked = []
+            for shard_index in range(shards_in):
+                npz = np.load(f"{dir}shard_{shard_index}/{file_index}.npz")
+                array = npz[f"arr_{array_index}"]
+                if array.dtype == 'V2':
+                    array.dtype = jnp.bfloat16
+                unstacked.append(array)
+            unsharded.append(jax.device_put(jnp.stack(unstacked), device=devices[(file_index*18+array_index) % device_count]))
+    print(f"read from disk/gcs in {time.time() - start:.06}s")
 
     loaded_pytree = jax.tree_unflatten(structure, unsharded)
-
-    if not load_opt:
-        loaded_pytree['opt_state'] = original_opt_state
     return loaded_pytree
 
 
