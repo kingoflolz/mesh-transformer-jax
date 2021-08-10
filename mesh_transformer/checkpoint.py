@@ -137,20 +137,21 @@ def read_ckpt(pytree, dir, shards_in):
     start = time.time()
     unsharded = []
     devices = jax.devices()
-    device_count = jax.device_count()
-    for file_index in range(16):
+    device_count = len(devices)
+    device_index = 0
+    for file_index in range(pieces):
         print(f"read_ckpt {file_index}.npz")
-        for array_index in range(18):
-            if file_index == 15 and array_index == 17:
-                break
+        array_keys = np.load(f"{dir}shard_0/{file_index}.npz").keys()
+        for array_index in range(len(array_keys)):
             unstacked = []
             for shard_index in range(shards_in):
                 npz = np.load(f"{dir}shard_{shard_index}/{file_index}.npz")
-                array = npz[f"arr_{array_index}"]
+                array = npz[array_keys[array_index]]
                 if array.dtype == 'V2':
                     array.dtype = jnp.bfloat16
                 unstacked.append(array)
-            unsharded.append(jax.device_put(jnp.stack(unstacked), device=devices[(file_index*18+array_index) % device_count]))
+            unsharded.append(jax.device_put(jnp.stack(unstacked), device=devices[device_index % device_count]))
+            device_index += 1
     print(f"read from disk/gcs in {time.time() - start:.06}s")
 
     loaded_pytree = jax.tree_unflatten(structure, unsharded)
