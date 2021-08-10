@@ -45,5 +45,6 @@
   "keep_every": 10000,
 
   "name": "GPT3_6B_pile_rotary",
+  "wandb_project": "mesh-transformer-jax",
   "comment": ""
 }

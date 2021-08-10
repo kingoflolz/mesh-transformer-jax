@@ -36,5 +36,6 @@
   "keep_every": 72,
 
   "name": "example_model",
+  "wandb_project": "mesh-transformer-jax",
   "comment": ""
 }

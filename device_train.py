@@ -31,6 +31,8 @@ def parse_args():
         - set `tpu_size` to 8 (if on a v3-8)
         - set `warmup_steps`, `anneal_steps`, `lr`, `end_lr` to the lr schedule for your finetuning run
         - the global step will reset to 0, keep that in mind when writing your lr schedule
+        - set `name` to specify the name of the Weights & Biases run
+        - set `wandb_project` to specify the Weights & Biases project to log to
     To prepare data in the expected data format:
         - use the script `create_finetune_tfrecords.py` in this repo to create data in the expected format
         - upload the .tfrecords files to GCS
@@ -165,17 +167,19 @@ if __name__ == "__main__":
     lr = params["lr"]
     end_lr = params["end_lr"]
     weight_decay = params["weight_decay"]
-
+   
     # alpha parameter for the exponential moving averages used to compute B_simple
     noise_scale_alpha = params.get("noise_scale_alpha", 0.01)
 
+    scheduler = util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr)
+    
     opt = optax.chain(
         optax.scale(1 / gradient_accumulation_steps),
         clip_by_global_norm(1),
         optax.scale_by_adam(),
         additive_weight_decay(weight_decay),
         optax.scale(-1),
-        optax.scale_by_schedule(util.gpt3_schedule(warmup_steps, anneal_steps, lr, end_lr))
+        optax.scale_by_schedule(scheduler)
     )
 
     params["optimizer"] = opt
@@ -286,7 +290,8 @@ if __name__ == "__main__":
             val_set.reset()
         print(f"Eval fn compiled in {time.time() - start:.06}s")
 
-        wandb.init(project='mesh-transformer-jax', name=params["name"], config=params)
+        project = params.get("wandb_project", "mesh-transformer-jax")
+        wandb.init(project=project, name=params["name"], config=params)
 
         G_noise_avg = None
         S_noise_avg = None
@@ -326,7 +331,6 @@ if __name__ == "__main__":
 
             steps_per_sec = 1 / (time.time() - start)
             tokens_per_sec = tokens_per_step * steps_per_sec
-
             sequences_processed = sequences_per_step * step
             tokens_processed = tokens_per_step * step
 
@@ -386,6 +390,7 @@ if __name__ == "__main__":
                 "train/steps_per_sec": steps_per_sec,
                 "train/tokens_per_sec": tokens_per_sec,
                 "train/grad_norm": grad_norm,
+                "train/learning_rate": float(scheduler(network.state["opt_state"][-1].count[0].item())),
                 "sequences_processed": sequences_processed,
                 "tokens_processed": tokens_processed,
             }
