@@ -8,11 +8,21 @@ import jax.numpy as jnp
 import numpy as np
 import multiprocessing
 
+import ray
 from smart_open import open
 
 from mesh_transformer.util import head_print
 
 pieces = 16  # how many files to split each shard across
+
+
+def fix_dtype(pytree):
+    def fix(x):
+        if x.dtype == np.dtype('V2'):
+            x.dtype = jnp.bfloat16
+        return jnp.asarray(x)
+
+    return jax.tree_map(fix, pytree)
 
 
 @functools.partial(jax.jit, backend="cpu")
@@ -166,28 +176,34 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
 
 
 def parallel_write(arrays, fname):
+    # TODO: make this actually parallel
     with open(fname, "wb") as f:
         np.savez(f, *arrays)
 
 
-def parallel_read(old, fname):
-    old_val, treedef = jax.tree_flatten(old)
-    with open(fname, "rb") as f:
-        buf = f.read()
-        f_io = io.BytesIO(buf)
-        loaded = np.load(f_io)
+def parallel_read(old, fname, validate=True):
+    old_vals, treedef = jax.tree_flatten(old)
+
+    if "gs://" in fname:
+        # TODO: make this actually parallel
+        with open(fname, "rb") as f:
+            buf = f.read()
+            f_io = io.BytesIO(buf)
+            loaded = np.load(f_io)
+    else:
+        loaded = np.load(fname, mmap_mode='r')
 
     new_vals = []
     for i in loaded:
         new_vals.append(loaded[i])
 
-    for o, n in zip(new_vals, old_val):
-        assert o.shape == n.shape, "Incompatible checkpoint"
+    assert len(new_vals) == len(old_vals), "Incompatible checkpoint"
 
-        if o.dtype == np.dtype('V2'):
-            o.dtype = jnp.bfloat16
+    for o, n in zip(new_vals, old_vals):
+        if validate:
+            assert o.shape == n.shape, "Incompatible checkpoint"
 
-    return jax.tree_unflatten(treedef, new_vals)
+    return jax.tree_unflatten(treedef, fix_dtype(new_vals))
 
 
 def write_ckpt_v2(model_state, dir):
@@ -207,13 +223,80 @@ def write_ckpt_v2(model_state, dir):
     head_print(f"opt_state written in {time.time() - start:.06}s")
 
 
-def load_ckpt_v2(model_state, dir):
+def read_sharded_v2(state, dir, checkpoint_hosts, state_shard):
+    files_per_host = checkpoint_hosts // jax.host_count()
+
+    assert files_per_host >= 1, "can't restore model to larger pod than was trained on (yet)"
+    assert jax.host_count() * files_per_host == checkpoint_hosts, "weird host count"
+
+    if files_per_host == 1:
+        head_print("using fast path of checkpoint restore (save shards == read shards)")
+        parallel_read(state, dir + f"/shard_{jax.host_id()}.npz")
+
+    @ray.remote
+    def read_remote(old, fname):
+        return parallel_read(old, fname, validate=False)
+
+    start_idx = files_per_host * jax.host_id()
+
+    skeleton = jax.tree_map(lambda x: jnp.zeros_like(x, shape=()), state)  # a full pytree just to carry dtypes
+
+    refs = [
+        read_remote.remote(skeleton, f"{dir}/shard_{i}.npz")
+        for i in range(start_idx, start_idx + files_per_host)
+    ]
+
+    values = ray.get(refs)
+
+    def all_array_equal(iterator):
+        try:
+            iterator = iter(iterator)
+            first = next(iterator)
+            return all(jnp.array_equal(first, rest) for rest in iterator)
+        except StopIteration:
+            return True
+
+    def reshard_v2(old, shard_strategy, *new_values):
+        rep_dim_count = shard_strategy.count(None)
+        total_dim_count = len(shard_strategy)
+
+        # head_print("old.shape", old.shape)
+        # head_print("shard_strategy", shard_strategy)
+
+        assert len(old.shape) == total_dim_count
+
+        if rep_dim_count == total_dim_count:
+            # fully replicated
+            assert all_array_equal(new_values)
+            return fix_dtype(new_values[0])
+
+        shard_dim = [idx for idx, dim in enumerate(shard_strategy) if dim is not None and "mp" in dim]
+
+        # only support sharding in 1d for now
+        assert len(shard_dim) == 1
+        shard_dim = shard_dim[0]
+
+        ret_val = jnp.concatenate(fix_dtype(new_values), axis=shard_dim)
+        assert old.shape == ret_val.shape
+
+        return jax.device_put(ret_val, jax.devices("cpu")[0])
+
+    # head_print("state", jax.tree_structure(state))
+    # head_print("state_shard", jax.tree_structure(state_shard))
+    # head_print("values", jax.tree_structure(values[0]))
+
+    return jax.tree_multimap(reshard_v2, *([state, state_shard] + values))
+
+
+def load_ckpt_v2(model_state, dir, state_shard, load_opt):
+    while dir.endswith("/"):
+        dir = dir[:-1]
+
     start = time.time()
     with open(dir + "/meta.json", "r") as f:
         meta = json.load(f)
 
-    # TODO: make this work in the general case
-    assert meta["total_hosts"] == jax.host_count(), "Must load with same number of hosts as when saved"
+    ckpt_hosts = meta["total_hosts"]
 
     head_print(f"meta loaded in {time.time() - start:.06}s")
 
@@ -222,11 +305,20 @@ def load_ckpt_v2(model_state, dir):
     }
 
     start = time.time()
-    new_state["params"] = parallel_read(model_state["params"], dir + f"/params/shard_{jax.host_id()}.npz")
+    new_state["params"] = read_sharded_v2(model_state["params"],
+                                          dir + "/params",
+                                          ckpt_hosts,
+                                          state_shard["params"])
     head_print(f"params loaded in {time.time() - start:.06}s")
 
+    if not load_opt:
+        return new_state
+
     start = time.time()
-    new_state["opt_state"] = parallel_read(model_state["opt_state"], dir + f"/opt_state/shard_{jax.host_id()}.npz")
+    new_state["opt_state"] = read_sharded_v2(model_state["opt_state"],
+                                             dir + "/opt_state",
+                                             ckpt_hosts,
+                                             state_shard["opt_state"])
     head_print(f"opt_state loaded in {time.time() - start:.06}s")
 
     return new_state
