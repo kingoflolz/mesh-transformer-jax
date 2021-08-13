@@ -1,6 +1,7 @@
 # Have tested with a custom Ubuntu-1804 / Python 3.7 / Tensorflow 2.5.0 Base Image
 # Not tested with this image. 
 FROM tensorflow/tensorflow:latest
+RUN apt-get install git -y
 
 WORKDIR /app/
 COPY . /app/
