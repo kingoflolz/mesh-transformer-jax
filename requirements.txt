@@ -1,7 +1,6 @@
 numpy~=1.19.5
 transformers~=4.8.2
 tqdm~=4.45.0
-setuptools~=51.3.3
 wandb>=0.11.2
 einops~=0.3.0
 requests~=2.25.1
