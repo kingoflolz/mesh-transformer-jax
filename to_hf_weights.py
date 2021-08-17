@@ -2,38 +2,30 @@
 # run with 'help' arg for usage.
 ####
 
-
-"""
-python3.8 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip setuptools
-pip install -r requirements.txt
-pip install pathy
-pip install --upgrade jax==0.2.12 jaxlib==0.1.67+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
-"""
+import argparse
+import io
+import multiprocessing
+import warnings
 import os
 import re
-from typing import List, Tuple, Union
+from typing import Iterable, Iterator, List, Tuple, Union
 
-from jax._src.numpy.lax_numpy import ndarray
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
+import torch
+from pathy import FluidPath, Pathy
+from tqdm import tqdm
+
+import mesh_transformer.util as util
+from mesh_transformer.sampling import nucleaus_sample
+from mesh_transformer.transformer_shard import CausalTransformer
 
 # xla: tells jax to not pre allocate all device memory
 # and only allocate memory as needed.
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
-
-import argparse
-import io
-import multiprocessing
-import torch
-from tqdm import tqdm
-
-import numpy as np
-from pathy import Pathy, FluidPath
-
-#! Some imports are done after argument processing so that cli is faster
-# i.e. no waiting a minute for the `help` command or a missed arg
-
 
 DEBUG = False
 
@@ -88,9 +80,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cpu",
         action="store_true",
-        help="Run resharding on cpu if not on v3-8 tpu.",
+        help="Run resharding on cpu instead of searching for jax device (i.e. gpu/tpu)",
     )
-    # TODO(dwarf): add support for configs?
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="fp16",
+        help="One of fp32, fp16 or bf16. Default=fp16. WARNING: Experimental. Make sure to check weights after conversion to make sure dtype information is retained.",
+    )
     args = vars(parser.parse_args())
     # validate args
     process_args(**args)
@@ -124,1202 +121,11 @@ def tree_leaves_with_names(pytree, to_id=id):
     return tree_flatten_with_names(pytree, is_leaf)
 
 
-def get_tree_leaves_names_original(params):
+def get_tree_leaves_names_reduced(pytree) -> List[str]:
 
-    params["optimizer"] = optax.chain(
-        optax.scale(1),
-        util.clip_by_global_norm(1),
-        optax.scale_by_adam(),
-        optax.additive_weight_decay(0),
-        optax.scale(-1),
-        optax.scale_by_schedule(util.gpt3_schedule(0, 1, 0, 0)),
-    )
-
-    devices = np.array([jax.devices()[0]]).reshape((1, 1))
-    with jax.experimental.maps.mesh(devices, ("dp", "mp")):  # type: ignore
-        network = CausalTransformer(params)
-        leaves_ids = tree_leaves_with_names(network.state, to_id=id)
-        leaves = jax.tree_leaves(network.state)
-        leaves_names = [leaves_ids[id(l)] for l in leaves]
-
-        return leaves_names
-
-
-def get_tree_leaves_names_reduced(params):
-
-    jax.config.update("jax_platform_name", "cpu")
-
-    params["optimizer"] = optax.scale(0)
-
-    devices = np.array([jax.devices()[0]]).reshape((1, 1))
-    with jax.experimental.maps.mesh(devices, ("dp", "mp")):  # type: ignore
-        network = CausalTransformer(params)
-        leaves_ids = tree_leaves_with_names(network.state, to_id=id)
-        leaves = jax.tree_leaves(network.state)
-        leaves_names = [leaves_ids[id(l)] for l in leaves]
-
-        return leaves_names
-
-
-# This one is only used if checkpoint hasn't been slimmed
-# TODO: is this needed? should it just require a slimmed checkpoint?
-# leaves_names_original = get_tree_leaves_names_original(params)
-# print(leaves_names_original)
-leaves_names_original = [
-    "/opt_state",
-    "/opt_state/causal_transformer_shard/~/embedding_shard/~/linear/b",
-    "/opt_state/causal_transformer_shard/~/embedding_shard/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/linear/b",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/embedding_shard/~/linear/b",
-    "/opt_state/causal_transformer_shard/~/embedding_shard/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_1/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_2/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_3/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_4/b",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_4/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_5/b",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/linear_5/w",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/scale",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/linear/b",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/linear/w",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/offset",
-    "/opt_state/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/scale",
-    "/opt_state",
-    "/params/causal_transformer_shard/~/embedding_shard/~/linear/b",
-    "/params/causal_transformer_shard/~/embedding_shard/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_1/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_10/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_11/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_12/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_13/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_14/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_15/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_16/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_17/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_18/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_19/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_2/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_20/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_21/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_22/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_23/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_24/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_25/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_26/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_27/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_3/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_4/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_5/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_6/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_7/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_8/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_9/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/projection_shard/~/linear/b",
-    "/params/causal_transformer_shard/~/projection_shard/~/linear/w",
-    "/params/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/scale",
-    "/step",
-]
-
-# leaves_names_reduced = get_tree_leaves_names_reduced(params)
-# print(leaves_names_reduced)
-leaves_names_reduced = [
-    "/params/causal_transformer_shard/~/embedding_shard/~/linear/b",
-    "/params/causal_transformer_shard/~/embedding_shard/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_0/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_0/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_1/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_1/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_1/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_10/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_10/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_10/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_11/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_11/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_11/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_12/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_12/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_12/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_13/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_13/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_13/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_14/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_14/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_14/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_15/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_15/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_15/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_16/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_16/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_16/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_17/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_17/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_17/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_18/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_18/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_18/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_19/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_19/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_19/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_2/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_2/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_2/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_20/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_20/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_20/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_21/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_21/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_21/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_22/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_22/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_22/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_23/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_23/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_23/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_24/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_24/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_24/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_25/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_25/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_25/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_26/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_26/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_26/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_27/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_27/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_27/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_3/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_3/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_3/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_4/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_4/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_4/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_5/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_5/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_5/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_6/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_6/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_6/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_7/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_7/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_7/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_8/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_8/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_8/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/layer_9/~/linear/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_1/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_2/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_3/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_4/b",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_4/w",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_5/b",
-    "/params/causal_transformer_shard/~/layer_9/~/linear_5/w",
-    "/params/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/layer_9/~/replicated_layer_norm/scale",
-    "/params/causal_transformer_shard/~/projection_shard/~/linear/b",
-    "/params/causal_transformer_shard/~/projection_shard/~/linear/w",
-    "/params/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/offset",
-    "/params/causal_transformer_shard/~/projection_shard/~/replicated_layer_norm/scale",
-    "/step",
-]
+    leaves_ids = tree_leaves_with_names(pytree, to_id=id)
+    leaves = jax.tree_leaves(pytree)
+    return [leaves_ids[id(l)] for l in leaves]
 
 
 layer_2_hf_inner_module_id = {
@@ -1395,18 +201,15 @@ def reshard(x, old_shape, do_shard_ln, do_shard_bias):
 
         # TODO(nijkamp): incorrect
         # if (x[1:] == x[-1]).all():
-        if do_shard_ln or do_shard_bias:
-            # print("LN")
-            # if (x[1:] == 0).all() or (x[1:] == 1).all():
-            if do_shard_ln:
-                # TODO(nijkamp): for thise case, expression (x[1:] == 0).all() or (x[1:] == 1).all() should hold
-                # out = x[0:1]
-                out = np.array(x[0:1])
-            else:
-                # print("shard bias")
-                # out = x[0:1] * x.shape[0] / old_shape[0]
-                # TODO(nijkamp): sum() bias terms, is this correct?
-                out = np.reshape(np.sum(x, axis=0), old_shape)
+        if do_shard_ln:
+            # TODO(nijkamp): for thise case, expression (x[1:] == 0).all() or (x[1:] == 1).all() should hold
+            # out = x[0:1]
+            out = np.array(x[0:1])
+        elif do_shard_bias:
+            # print("shard bias")
+            # out = x[0:1] * x.shape[0] / old_shape[0]
+            # TODO(nijkamp): sum() bias terms, is this correct?
+            out = np.reshape(np.sum(x, axis=0), old_shape)
         else:
             # print("bias")
             out = x.reshape(old_shape)
@@ -1440,98 +243,35 @@ def read_shard(ckpt_dir: FluidPath, pieces=16):
     return out
 
 
-# def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int):
-#     def read_npz(fpath: FluidPath):
-#         with fpath.open("rb") as f:
-#             buf = f.read()
-#             f_io = io.BytesIO(buf)
-#             return np.load(f_io)
+def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> Iterator[List[np.ndarray]]:
+    def read_npz(fpath: FluidPath):
+        with fpath.open("rb") as f:
+            buf = f.read()
+            f_io = io.BytesIO(buf)
+            deserialized = np.load(f_io)
+            # arrays are only loaded when accessed. So we need to access them before returning
+            for i in deserialized:  # type: ignore
+                return [deserialized[i] for i in deserialized]  # type: ignore
 
-#     # read same file accross shards
-#     with multiprocessing.pool.ThreadPool(shards_in) as p:
-#         return p.imap(read_npz, [ckpt_dir / f"shard_{i}" / fname for i in range(shards_in)])
-
-
-# def lazy_read_ckpt_shards(ckpt_dir: FluidPath, shards_in: int, pieces=16):
-#     for i in range(pieces):
-#         fname = f"{i}.npz"
-#         file_shards = read_file_shards(ckpt_dir, fname, shards_in)
-
-#         # iterate over layers in file returning all shards for each
-#         yield from zip(*file_shards)
-
-
-def read_flattened_ckpt_with_names(
-    old_flattened_pytree, input_ckpt: FluidPath, shards_in: int, shards_out: int
-) -> Tuple[List[np.ndarray], List[str]]:
-    global leaves_names_original
-    global leaves_names_reduced
-
-    # TODO(nijkamp): rewrite this mess
+    # read same file accross shards
     with multiprocessing.pool.ThreadPool(shards_in) as p:
-        print("Reading Shards (this could take a while)...")
-        # load list of shards with axis/shape (n_shards(8?),n_layers,layer_shapes...)
-        loaded_shards_in = list(p.imap(read_shard, [input_ckpt / f"shard_{i}" for i in range(shards_in)]))
-        print("DONE reading shards")
+        file_shards = list(p.imap(read_npz, [ckpt_dir / f"shard_{i}" / fname for i in range(shards_in)]))
+        return file_shards  # type: ignore
 
-    # transpose shards so that first index is layers and then shards
-    # so that you can iterate through each layer and get all shards for that layer
-    # new axis/shape (n_layers, n_shards(8?), layer_shapes...)
-    loaded_shards_in = list(zip(*loaded_shards_in))
 
-    #! continue work here. see if this is necessary and test on both cpu and gpu and tpu
-    if len(loaded_shards_in) == len(leaves_names_original):
-        matching_leave_names = leaves_names_original
-    # reduced len=287
-    elif len(loaded_shards_in) == len(leaves_names_reduced):
-        matching_leave_names = leaves_names_reduced
-    else:
-        raise NotImplementedError(
-            "Couldn't match loaded weights with corresponding leave names"
-            f"{len(loaded_shards_in)=} {len(leaves_names_original)=} {len(leaves_names_reduced)=}"
-        )
-
-    unsharded_weights = []
-    layer_names = []
-    old_i = 0
-    for i in tqdm(range(len(matching_leave_names)), desc="Resharding"):
-
-        # pop instead of access to remove need to keep in memory
-        leave_shards = loaded_shards_in.pop(0)
-        leave_name = matching_leave_names[i]
-        if leave_name.startswith("/opt_state"):
-            continue
-
-        old = old_flattened_pytree.pop(0)
-
-        assert leave_name == leaves_names_reduced[old_i], f"{leave_name} {leaves_names_reduced[old_i]}"
-        # old = old_flattened[old_i]
-        old_i += 1
-
-        x = np.stack(leave_shards)
-        # TODO(nijkamp): what is this?
-        if x.dtype == np.dtype("V2"):
-            x.dtype = jnp.bfloat16
-
+def lazy_read_ckpt_shards(ckpt_dir: FluidPath, shards_in: int, pieces: int = 16, reverse: bool = True):
+    for i in range(pieces):
+        # iterate through files in direction of choice
+        fname = f"{(pieces-1) - i}.npz" if reverse else f"{i}.npz"
         if DEBUG:
-            print(f"RESHARDING: {i=} {old_i=} {leave_name=} {x.shape=} {old.shape=}")
+            print(f"reading from {fname}")
+        file_shards = read_file_shards(ckpt_dir, fname, shards_in)
 
-        if shards_out != shards_in:
-            x = reshard(
-                x,
-                old.shape,
-                do_shard_bias=leave_name.endswith("embedding_shard/~/linear/b")
-                or leave_name.endswith("linear_5/b"),
-                do_shard_ln=leave_name.endswith("replicated_layer_norm/offset")
-                or leave_name.endswith("replicated_layer_norm/scale"),
-            )
-
-        unsharded_weights.append(x)
-        layer_names.append(leave_name)
-
-        assert x.shape == old.shape, f"Incompatible checkpoints {x.shape} vs {old.shape} {leave_name}"
-
-    return unsharded_weights, layer_names
+        # iterate over layers in file returning all shards for each
+        file_shards = list(zip(*file_shards))
+        if reverse:
+            file_shards = reversed(file_shards)
+        yield from file_shards
 
 
 def save_hf_layer(
@@ -1548,54 +288,98 @@ def save_hf_layer(
     return pt_save_idx + 1, layer_map
 
 
-def save_hf_weights(
+def unshard_leave(
+    leave_shards: Iterable[np.ndarray], leave_name: str, old_shape: List[int], np_dtype=np.float16
+):
+    # reshard all leave shards into single shard.
+
+    # stack leave shards into single np.ndarray
+    x = np.stack(leave_shards)
+
+    # TODO: Figure out what this does
+    if x.dtype == np.dtype("V2"):  # type: ignore
+        x.dtype = jnp.bfloat16  # type: ignore
+
+    if DEBUG:
+        print(f"RESHARDING: {leave_name=} {x.shape=} {old_shape=}")  # type: ignore
+
+    # transform sharded array to match old_shape
+    x = reshard(
+        x,
+        old_shape,
+        do_shard_bias=leave_name.endswith("embedding_shard/~/linear/b") or leave_name.endswith("linear_5/b"),
+        do_shard_ln=leave_name.endswith("replicated_layer_norm/offset")
+        or leave_name.endswith("replicated_layer_norm/scale"),
+    )
+    assert x.shape == old_shape, f"Incompatible checkpoints {x.shape} vs {old_shape} {leave_name}"
+    return x
+
+
+def save_pytree_as_hf(
     pytree,
     input_ckpt: FluidPath,
     shards_in: int,
-    shards_out: int,
     output_path: FluidPath,
     n_layers: int = 28,
+    np_dtype: type = np.float16,
+    torch_dtype: torch.dtype = torch.float16,
 ):
-    old_flattened, _ = jax.tree_flatten(pytree)
+    # Loads layers and names in reverse order to avoid loading unneeded opt_state layers
+    # that are at the front of full (i.e. not slim) models.
+
+    old_leave_shapes = [old.shape for old in jax.tree_flatten(pytree)[0]]
+    leave_names = get_tree_leaves_names_reduced(pytree)
     del pytree
-    unsharded, layer_names = read_flattened_ckpt_with_names(old_flattened, input_ckpt, shards_in, shards_out)
 
-    # Convert to torch tensors at float16 precision.
-    # Remove fist dimension which is 1 after resharding.
-    # Transpose since all weights except wte require transposing for HF.
-    unsharded = [torch.tensor(weights.squeeze(0).astype(np.float16)).half().T for weights in unsharded]
+    assert len(old_leave_shapes) == len(leave_names), f"{len(old_leave_shapes)=}  {len(leave_names)=}"
+    # get generator that emits all shards of leaves from npz files in reverse order
+    loaded_shards_in = lazy_read_ckpt_shards(input_ckpt, shards_in, reverse=True)
 
-    wte_first = None
+    print("Reading and transforming layers/shards. This may take a while.")
 
     pt_save_idx = 0
     save_map = {}
-    for i in tqdm(range(len(unsharded)), desc="Saving pt files"):
-        params = unsharded.pop(0)
-        layer_name = layer_names.pop(0)
+    wte_first = None
+    # Reverse iteration to grab leave_names and old leaves from the back
+    for i in tqdm(
+        reversed(range(len(leave_names))), desc="Reading/Transforming Layers", total=len(leave_names)
+    ):
 
-        hf_layer_id = leave_name_to_hf_layer_id(layer_name)
+        # load next shard with correstponding leave name and old shape
+        x = next(loaded_shards_in)
+        leave_name = leave_names[i]
+        old_shape = old_leave_shapes[i]
+        hf_layer_id = leave_name_to_hf_layer_id(leave_name)
+
+        # If leave is not needed in hf model (/step')
         if not hf_layer_id:
             continue
 
+        x = unshard_leave(x, leave_name, old_shape, np_dtype=np_dtype)
+
+        x = torch.tensor(x.squeeze(0), dtype=torch_dtype).T
+
         # wte embedding weights need to be combined since hf model has no wte.embedding.bias
         if hf_layer_id.startswith("transformer.wte"):
-            # un/re-transpose since wte weight is only layer that shouldn't be transposed
-            params = params.T
+            # un/re-transpose since wte weight is only leave that shouldn't be transposed
+            x = x.T
             # store first weight/bias then skip saving
             if wte_first is None:
-                wte_first = params
+                wte_first = x
                 continue
             # combine second wte bias/weight with first then move on to saving with weight name
             else:
-                params = params + wte_first
+                x = x + wte_first
                 hf_layer_id = "transformer.wte.weight"
 
-        pt_save_idx, save_map = save_hf_layer(params, hf_layer_id, pt_save_idx, output_path, save_map)
+        # save params as single file with proper hf id mapped to them in save_map
+        pt_save_idx, save_map = save_hf_layer(x, hf_layer_id, pt_save_idx, output_path, save_map)
 
     # add attention bias layers
     # using float32 here instead of 16 to match pt model weights that were distributed for huggingface.
-    attn_bias_weights = torch.tril(torch.tensor(np.ones((1, 1, 2048, 2048)), dtype=torch.float32))
-    attn_masked_bias_weights = torch.tensor(np.array(-1e9), dtype=torch.float32)
+    attn_bias_weights = torch.tril(torch.tensor(np.ones((1, 1, 2048, 2048)), dtype=torch_dtype))
+    attn_masked_bias_weights = torch.tensor(np.array(-1e9), dtype=torch_dtype)
+
     for i in range(n_layers):
         bias_id = f"transformer.h.{i}.attn.attention.bias"
         masked_bias_id = f"transformer.h.{i}.attn.attention.masked_bias"
@@ -1607,21 +391,26 @@ def save_hf_weights(
     torch.save(save_map, (output_path / "m.pt").open(mode="wb"))
 
 
-# expensive imports delayed until after command line argument validation
-import jax
-import jax.numpy as jnp
-
-import optax
-import mesh_transformer.util as util
-from mesh_transformer.sampling import nucleaus_sample
-from mesh_transformer.transformer_shard import CausalTransformer
-
-
 def save_sharded_to_hf_format(
     input_ckpt: Union[FluidPath, str],
     output_path: Union[FluidPath, str],
     cpu: bool = False,
+    dtype: str = "fp16",
 ):
+    assert dtype in {"fp16", "fp32", "bf16"}
+    np_dtype = np.float16
+    torch_dtype = torch.float16
+    if dtype != "fp16":
+        warnings.warn(
+            "WARNING: Dtype support other than fp16 is Experimental. Make sure to check weights after conversion to make sure dtype information is retained."
+        )
+        if dtype == "bf16":
+            # np doesn't have bfloat16 so float32 is used to retain information before converting to torch.
+            np_dtype = np.float32
+            torch_dtype = torch.bfloat16
+        elif dtype == "fp32":
+            np_dtype = np.float32
+            torch_dtype = torch.float32
     if cpu:
         jax.config.update("jax_platform_name", "cpu")
 
@@ -1641,26 +430,26 @@ def save_sharded_to_hf_format(
         "seq": 2048,
         "cores_per_replica": 1,
         "per_replica_batch": 1,
+        "optimizer": optax.scale(0),
+        "sampler": nucleaus_sample,
     }
 
-    # TODO(nijkamp): overwriting the optimizer mutates the pytree in order to reduce memory alloc, but this will break the serialization format, serialize model into optim / param files separately to clean this mess
-    params["optimizer"] = optax.scale(0)
-    params["sampler"] = nucleaus_sample
-
     devices = np.array([jax.devices()[0]]).reshape((1, 1))
-    with jax.experimental.maps.mesh(devices, ("dp", "mp")):
+    with jax.experimental.maps.mesh(devices, ("dp", "mp")):  # type: ignore
+
         network = CausalTransformer(params)
 
-        save_hf_weights(
+        save_pytree_as_hf(
             network.state,
             input_ckpt=input_ckpt,
             shards_in=8,
-            shards_out=1,
             output_path=output_path,
             n_layers=params["layers"],
+            np_dtype=np_dtype,
+            torch_dtype=torch_dtype,
         )
 
 
 if __name__ == "__main__":
     # python to_hf_weights.py --input_ckpt ../gpt-j-train/base_models/step_383500 --output_path resharded/debug_ckpt --cpu
-    save_sharded_to_hf_format(args["input_ckpt"], args["output_path"], args["cpu"])
+    save_sharded_to_hf_format(args["input_ckpt"], args["output_path"], args["cpu"], args["dtype"])  # type: ignore
