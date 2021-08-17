@@ -1,42 +1,84 @@
 ####
-# run with 'help' arg for usage.
+# run 'python to_hf_weights.py --help' to see usage.
+####
+# python to_hf_weights.py --input_ckpt /step_383500 --output_path resharded/debug_ckpt --cpu
 ####
 
 import argparse
 import io
 import multiprocessing
+import time
 import warnings
 import os
 import re
-from typing import Iterable, Iterator, List, Tuple, Union
+from typing import Iterable, List, Tuple, Union
 
 import jax
 import jax.numpy as jnp
+from jax.experimental import maps
 import numpy as np
 import optax
 import torch
 from pathy import FluidPath, Pathy
 from tqdm import tqdm
 
-import mesh_transformer.util as util
-from mesh_transformer.sampling import nucleaus_sample
 from mesh_transformer.transformer_shard import CausalTransformer
 
-# xla: tells jax to not pre allocate all device memory
+# xla: tell jax to not pre allocate all device memory
 # and only allocate memory as needed.
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 DEBUG = False
 
+parser = argparse.ArgumentParser(
+    description=(
+        "Used to turn a sharded trained gpt-j checkpoint into pytorch hugging face format."
+        "This script works best on a slimmed checkpoint (full checkpoints can be used but require ~100gb of ram)."
+        "Currently, weights must be split into 8 shards for this to work."
+        "All paths can be local or google cloud storage paths. S3 paths supported as well with `pip install pathy[s3]`."
+        "Can be run on tpu, or on gpu with `pip install --upgrade jax==0.2.12 jaxlib==0.1.67+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html`"
+    )
+)
+parser.add_argument(
+    "--input_ckpt",
+    metavar="path",
+    type=str,
+    help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
+    required=True,
+)
+parser.add_argument(
+    "--output_path",
+    required=True,
+    type=str,
+    help='Full path to save checkpoint to. Google storage can be used with "gs://bucket/path" format.',
+)
+parser.add_argument(
+    "--debug",
+    action="store_true",
+    help="Verbose printing.",
+)
+parser.add_argument(
+    "--cpu",
+    action="store_true",
+    help="Run resharding on cpu instead of searching for jax device (i.e. gpu/tpu). Will default to cpu if jax wasn't installed with `+cuda110` option",
+)
+parser.add_argument(
+    "--dtype",
+    type=str,
+    default="fp16",
+    help="One of fp32, fp16 or bf16. Default=fp16. WARNING: Experimental. Make sure to check weights after conversion to make sure dtype information is retained.",
+)
+
 
 def process_args(
     input_ckpt: Union[FluidPath, str],
     output_path: Union[FluidPath, str],
+    dtype: str = "fp16",
+    cpu: bool = False,
     **kwargs,
 ):
     # validate paths and turn them into Pathy paths.
-    # seperated from reshard_checkpoint so that args can be validated before expensive imports
     input_ckpt = Pathy.fluid(str(input_ckpt))
     assert input_ckpt.is_dir(), f'no such directory "{input_ckpt}"'
     first_shard = input_ckpt / "shard_0"
@@ -45,54 +87,27 @@ def process_args(
     output_path = Pathy.fluid(str(output_path))
     output_path.mkdir(exist_ok=True)
 
-    return input_ckpt, output_path
-
-
-# parse args before importing expensive
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Used to turn a sharded trained gpt-j checkpoint into pytorch hugging face format."
-            "This script works best on a slimmed checkpoint (full checkpoints can be used but require ~100gb of ram)."
-            "Currently, weights must be split into 8 shards for this to work."
-            "All paths can be local or google cloud storage paths. S3 paths supported as well with `pip install pathy[s3]`."
+    # make sure dtype is valid
+    assert dtype in {"fp16", "fp32", "bf16"}
+    np_dtype = np.float16
+    torch_dtype = torch.float16
+    if dtype != "fp16":
+        warnings.warn(
+            "WARNING: Dtype support other than fp16 is Experimental. Make sure to check weights after conversion to make sure dtype information is retained."
         )
-    )
-    parser.add_argument(
-        "--input_ckpt",
-        metavar="path",
-        type=str,
-        help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
-        required=True,
-    )
-    parser.add_argument(
-        "--output_path",
-        required=True,
-        type=str,
-        help='Full path to save checkpoint to. Google storage can be used with "gs://bucket/path" format.',
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Verbose printing.",
-    )
-    parser.add_argument(
-        "--cpu",
-        action="store_true",
-        help="Run resharding on cpu instead of searching for jax device (i.e. gpu/tpu)",
-    )
-    parser.add_argument(
-        "--dtype",
-        type=str,
-        default="fp16",
-        help="One of fp32, fp16 or bf16. Default=fp16. WARNING: Experimental. Make sure to check weights after conversion to make sure dtype information is retained.",
-    )
-    args = vars(parser.parse_args())
-    # validate args
-    process_args(**args)
+        if dtype == "bf16":
+            # np doesn't have bfloat16 so float32 is used to retain information before converting to torch.
+            np_dtype = np.float32
+            torch_dtype = torch.bfloat16
+        elif dtype == "fp32":
+            np_dtype = np.float32
+            torch_dtype = torch.float32
 
-    DEBUG = args["debug"]
+    # tell jax to run on cpu instead of gpu/tpu
+    if cpu:
+        jax.config.update("jax_platform_name", "cpu")
+
+    return input_ckpt, output_path, np_dtype, torch_dtype
 
 
 def tree_flatten_with_names(pytree, is_leaf, path="", to_id=id):
@@ -144,8 +159,6 @@ projection_layer_2_hf_id_start = {
 }
 
 
-# TODO(dwarf): could be setup to load npz weights directly into hf model
-# similar to `load_tf_weights_in_gpt2` in https://huggingface.co/transformers/v1.2.0/_modules/pytorch_transformers/modeling_gpt2.html
 def leave_name_to_hf_layer_id(leaf_name: str):
     if not leaf_name.startswith("/params"):
         if leaf_name == "/step":
@@ -171,7 +184,7 @@ def leave_name_to_hf_layer_id(leaf_name: str):
     else:
         raise NotImplementedError(f"unknown weight/bais type identifier \"{wb}\" at end of: '{leaf_name}'")
 
-    # switch based on top level module name
+    # switch statement based on top level module name
     if module_name == "embedding_shard":
         hf_id = f"transformer.wte.{weight_or_bias}"
 
@@ -179,8 +192,10 @@ def leave_name_to_hf_layer_id(leaf_name: str):
         module_index = int(module_name.split("_")[-1])
         hf_inner_module_id = layer_2_hf_inner_module_id[layer_name]
         hf_id = f"transformer.h.{module_index}.{hf_inner_module_id}.{weight_or_bias}"
+
     elif module_name == "projection_shard":
         hf_id = f"{projection_layer_2_hf_id_start[layer_name]}.{weight_or_bias}"
+
     else:
         raise NotImplementedError(f"unknown leaf module type \"{module_name}\" in: '{leaf_name}'")
 
@@ -192,71 +207,57 @@ def leave_name_to_hf_layer_id(leaf_name: str):
 
 # TODO(nijkamp): rewrite this mess
 def reshard(x, old_shape, do_shard_ln, do_shard_bias):
+    # reshards using numpy arrays so as to not fill up jax memory
     if len(x.shape) == 1:
-        # out = x[0:1]
         out = np.array(x[0:1])
 
     elif len(x.shape) == 2:
-        # print(f"LN/bias {x.shape}")
-
-        # TODO(nijkamp): incorrect
-        # if (x[1:] == x[-1]).all():
         if do_shard_ln:
-            # TODO(nijkamp): for thise case, expression (x[1:] == 0).all() or (x[1:] == 1).all() should hold
-            # out = x[0:1]
             out = np.array(x[0:1])
         elif do_shard_bias:
-            # print("shard bias")
-            # out = x[0:1] * x.shape[0] / old_shape[0]
-            # TODO(nijkamp): sum() bias terms, is this correct?
             out = np.reshape(np.sum(x, axis=0), old_shape)
         else:
-            # print("bias")
             out = x.reshape(old_shape)
 
     elif len(x.shape) == 3:
-        # print(f"weight {x.shape}")
         if x.shape[0] * x.shape[2] == old_shape[2]:
             out = np.transpose(x, (1, 0, 2)).reshape(old_shape)
-            # out = jnp.transpose(x, (1, 0, 2)).reshape(old_shape)
         elif x.shape[0] * x.shape[1] == old_shape[1]:
-            # out = x.reshape(old_shape)
             out = np.reshape(x, old_shape)
         else:
-            raise Exception(f"unimplemented, {x.shape}, {old_shape}")
+            raise NotImplementedError(f"unimplemented, {x.shape}, {old_shape}")
     else:
-        raise Exception(f"unimplemented, {x}")
-
+        raise NotImplementedError(f"unimplemented, {x}")
     return out
 
 
-def read_shard(ckpt_dir: FluidPath, pieces=16):
-    out = []
-    for idx in range(pieces):
-        file_path = ckpt_dir / f"{idx}.npz"
-        with file_path.open("rb") as f:
-            buf = f.read()
-            f_io = io.BytesIO(buf)
-            deserialized = np.load(f_io)
-            for i in deserialized:  # type: ignore
-                out.append(deserialized[i])  # type: ignore
-    return out
+def read_npz(fpath: FluidPath):
+    # read npz file of ndarrays
+    with fpath.open("rb") as f:
+        buf = f.read()
+        f_io = io.BytesIO(buf)
+        deserialized = np.load(
+            f_io,
+        )
+        assert isinstance(deserialized, np.lib.npyio.NpzFile), f"Not an npz file {type(deserialized)=} {f=}"
+        # arrays are only loaded when accessed. So we need to access them before returning
+        arrays = []
+        for i in deserialized:
+            arr = deserialized[i]
+            assert isinstance(arr, np.ndarray), f"Not a np.ndarray {type(arr)=} {f=}"
+            arrays.append(arr)
+        return arrays
 
 
-def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> Iterator[List[np.ndarray]]:
-    def read_npz(fpath: FluidPath):
-        with fpath.open("rb") as f:
-            buf = f.read()
-            f_io = io.BytesIO(buf)
-            deserialized = np.load(f_io)
-            # arrays are only loaded when accessed. So we need to access them before returning
-            for i in deserialized:  # type: ignore
-                return [deserialized[i] for i in deserialized]  # type: ignore
-
-    # read same file accross shards
+def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> List[List[np.ndarray]]:
+    # read same file like "12.npz" accross all shard directories
     with multiprocessing.pool.ThreadPool(shards_in) as p:
-        file_shards = list(p.imap(read_npz, [ckpt_dir / f"shard_{i}" / fname for i in range(shards_in)]))
-        return file_shards  # type: ignore
+        return list(
+            p.imap(
+                read_npz,
+                [ckpt_dir / f"shard_{i}" / fname for i in range(shards_in)],
+            )
+        )
 
 
 def lazy_read_ckpt_shards(ckpt_dir: FluidPath, shards_in: int, pieces: int = 16, reverse: bool = True):
@@ -295,10 +296,13 @@ def unshard_leave(
 
     # stack leave shards into single np.ndarray
     x = np.stack(leave_shards)
+    assert isinstance(x, jnp.ndarray)
 
-    # TODO: Figure out what this does
-    if x.dtype == np.dtype("V2"):  # type: ignore
-        x.dtype = jnp.bfloat16  # type: ignore
+    # As far as i can tell, this just re labels the dtype of arrays
+    # labeled with "V2" dtype. In theory, V2 was just an alias for bfloat16
+    # which needs to be relabeled in order for it to be understood.
+    if x.dtype == np.dtype("V2"):
+        x.dtype = jnp.bfloat16
 
     if DEBUG:
         print(f"RESHARDING: {leave_name=} {x.shape=} {old_shape=}")  # type: ignore
@@ -312,7 +316,7 @@ def unshard_leave(
         or leave_name.endswith("replicated_layer_norm/scale"),
     )
     assert x.shape == old_shape, f"Incompatible checkpoints {x.shape} vs {old_shape} {leave_name}"
-    return x
+    return x.astype(np_dtype)
 
 
 def save_pytree_as_hf(
@@ -338,8 +342,8 @@ def save_pytree_as_hf(
     print("Reading and transforming layers/shards. This may take a while.")
 
     pt_save_idx = 0
-    save_map = {}
-    wte_first = None
+    save_map = {}  # maps hf layer id's to .pt file names
+    wte_first = None  # saves first instance of a wte weight in order to combine it with the second.
     # Reverse iteration to grab leave_names and old leaves from the back
     for i in tqdm(
         reversed(range(len(leave_names))), desc="Reading/Transforming Layers", total=len(leave_names)
@@ -356,10 +360,10 @@ def save_pytree_as_hf(
             continue
 
         x = unshard_leave(x, leave_name, old_shape, np_dtype=np_dtype)
-
+        # remove first empty dimension and transpose.
         x = torch.tensor(x.squeeze(0), dtype=torch_dtype).T
 
-        # wte embedding weights need to be combined since hf model has no wte.embedding.bias
+        # wte embedding weights/bias need to be combined since hf model has no wte.embedding.bias
         if hf_layer_id.startswith("transformer.wte"):
             # un/re-transpose since wte weight is only leave that shouldn't be transposed
             x = x.T
@@ -376,7 +380,6 @@ def save_pytree_as_hf(
         pt_save_idx, save_map = save_hf_layer(x, hf_layer_id, pt_save_idx, output_path, save_map)
 
     # add attention bias layers
-    # using float32 here instead of 16 to match pt model weights that were distributed for huggingface.
     attn_bias_weights = torch.tril(torch.tensor(np.ones((1, 1, 2048, 2048)), dtype=torch_dtype))
     attn_masked_bias_weights = torch.tensor(np.array(-1e9), dtype=torch_dtype)
 
@@ -397,26 +400,10 @@ def save_sharded_to_hf_format(
     cpu: bool = False,
     dtype: str = "fp16",
 ):
-    assert dtype in {"fp16", "fp32", "bf16"}
-    np_dtype = np.float16
-    torch_dtype = torch.float16
-    if dtype != "fp16":
-        warnings.warn(
-            "WARNING: Dtype support other than fp16 is Experimental. Make sure to check weights after conversion to make sure dtype information is retained."
-        )
-        if dtype == "bf16":
-            # np doesn't have bfloat16 so float32 is used to retain information before converting to torch.
-            np_dtype = np.float32
-            torch_dtype = torch.bfloat16
-        elif dtype == "fp32":
-            np_dtype = np.float32
-            torch_dtype = torch.float32
-    if cpu:
-        jax.config.update("jax_platform_name", "cpu")
 
-    input_ckpt, output_path = process_args(input_ckpt=input_ckpt, output_path=output_path)
-
-    output_path.mkdir(exist_ok=True)
+    input_ckpt, output_path, np_dtype, torch_dtype = process_args(
+        input_ckpt=input_ckpt, output_path=output_path, dtype=dtype, cpu=cpu
+    )
 
     params = {
         "layers": 28,
@@ -431,12 +418,11 @@ def save_sharded_to_hf_format(
         "cores_per_replica": 1,
         "per_replica_batch": 1,
         "optimizer": optax.scale(0),
-        "sampler": nucleaus_sample,
+        "sampler": None,
     }
 
     devices = np.array([jax.devices()[0]]).reshape((1, 1))
-    with jax.experimental.maps.mesh(devices, ("dp", "mp")):  # type: ignore
-
+    with maps.mesh(devices, ("dp", "mp")):
         network = CausalTransformer(params)
 
         save_pytree_as_hf(
@@ -451,5 +437,9 @@ def save_sharded_to_hf_format(
 
 
 if __name__ == "__main__":
-    # python to_hf_weights.py --input_ckpt ../gpt-j-train/base_models/step_383500 --output_path resharded/debug_ckpt --cpu
-    save_sharded_to_hf_format(args["input_ckpt"], args["output_path"], args["cpu"], args["dtype"])  # type: ignore
+    args = vars(parser.parse_args())
+
+    DEBUG = args["debug"]
+    start = time.time()
+    save_sharded_to_hf_format(args["input_ckpt"], args["output_path"], args["cpu"], args["dtype"])
+    print(f"HF weights created in {(time.time() - start):.0f}s \"{args['output_path']}\"")
