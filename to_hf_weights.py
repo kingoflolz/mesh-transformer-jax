@@ -1,4 +1,5 @@
 ####
+# Script requires additional install of `pathy`
 # run 'python to_hf_weights.py --help' to see usage.
 ####
 # python to_hf_weights.py --input_ckpt /step_383500 --output_path resharded/debug_ckpt --cpu
@@ -19,10 +20,15 @@ from jax.experimental import maps
 import numpy as np
 import optax
 import torch
-from pathy import FluidPath, Pathy
+
 from tqdm import tqdm
 
 from mesh_transformer.transformer_shard import CausalTransformer
+
+try:
+    from pathy import FluidPath, Pathy
+except ModuleNotFoundError:
+    raise ModuleNotFoundError(f"{__file__} requires `pathy`. Please run `pip install pathy`")
 
 # xla: tell jax to not pre allocate all device memory
 # and only allocate memory as needed.
