@@ -256,7 +256,7 @@ def read_npz(fpath: FluidPath):
 
 
 def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> List[List[np.ndarray]]:
-    # read same file like "12.npz" accross all shard directories
+    # read same file like "12.npz" across all shard directories
     with multiprocessing.pool.ThreadPool(shards_in) as p:
         return list(
             p.imap(
