@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("name", type=str,
                         help="Name of output file will be {name}_{seqnum}.tfrecords, where seqnum is total sequence count")
     parser.add_argument("--output-dir", type=str, default="", help="Output directory (default: current directory)")
+    parser.add_argument("--encoding_fix", type=bool, default=True, help="Encoding fix function")
 
     cleaning_args = parser.add_argument_group('data cleaning arguments')
 
@@ -240,8 +241,17 @@ def chunk_and_finalize(arrays, args, encoder):
     if not args.preserve_data_order:
         random.shuffle(full_seqs)
 
-    return full_seqs, trailing_data
+    return full_seqs, trailing_dat
 
+def encoding_fix(path):
+    for x in os.listdir(path):
+        rawdata = open(f"{path}/{x}", "rb").read()
+        result = chardet.detect(rawdata)
+        charenc = result['encoding']
+        print(charenc)
+        if charenc != "ascii":
+            print("removing")
+            os.remove(f"{path}/{x}")
 
 def create_tfrecords(files, args):
     GPT2TokenizerFast.max_model_input_sizes['gpt2'] = 1e20  # disables a misleading warning
@@ -282,7 +292,10 @@ def create_tfrecords(files, args):
 
 if __name__ == "__main__":
     args = parse_args()
-
+    
+    if args.encoding_fix:
+        encoding_fix(args.input_dir)
+    
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
     files = get_files(args.input_dir)
