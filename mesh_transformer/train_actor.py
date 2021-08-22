@@ -22,13 +22,14 @@ class NetworkRunner(object):
         import haiku as hk
         # jax.experimental.maps.EXPERIMENTAL_SPMD_LOWERING = True
 
-        # thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
+        thread_resources.env = ResourceEnv(Mesh(np.empty((), dtype=object), ()), ())
 
         start = time.time()
         jax.devices()
 
         import warnings
         warnings.filterwarnings("ignore")
+        warnings.filterwarnings("ignore", category=ResourceWarning)
 
         if jax.host_id() == 0:
             warnings.filterwarnings("default")

@@ -206,12 +206,48 @@ def parallel_read(old, fname, validate=True):
     return jax.tree_unflatten(treedef, fix_dtype(new_vals))
 
 
+def tree_flatten_with_names(pytree, is_leaf, path="", to_id=id):
+    id_to_name = {}
+    if getattr(pytree, "items", None):
+        for k, v in pytree.items():
+            k_path = f"{path}/{k}"
+            if is_leaf(v):
+                id_to_name[to_id(v)] = k_path
+            else:
+                id_to_name = {**id_to_name, **tree_flatten_with_names(v, is_leaf=is_leaf, path=k_path)}
+    elif getattr(pytree, "__getitem__", None):
+        for v in pytree:
+            if is_leaf(v):
+                id_to_name[to_id(v)] = path
+            else:
+                id_to_name = {**id_to_name, **tree_flatten_with_names(v, is_leaf=is_leaf, path=path)}
+    else:
+        id_to_name[to_id(pytree)] = path
+    return id_to_name
+
+
+def tree_leaves_with_names(pytree, to_id=id):
+    leaves = jax.tree_leaves(pytree)
+    is_leaf = lambda x: not isinstance(x, list) and to_id(x) in [to_id(x) for x in leaves]
+    return tree_flatten_with_names(pytree, is_leaf)
+
+
 def write_ckpt_v2(model_state, dir):
     start = time.time()
     if jax.host_id() == 0:
+        param_map = tree_leaves_with_names(model_state["params"])
+        opt_map = tree_leaves_with_names(model_state["opt_state"])
+
+        meta = {
+                    "total_hosts": jax.host_count(),
+                    "step": int(model_state["step"]),
+                    "param_order": [param_map[id(i)] for i in jax.tree_leaves(model_state["params"])],
+                    "opt_order": [opt_map[id(i)] for i in jax.tree_leaves(model_state["opt_state"])]
+        }
+
         print("step:", model_state["step"])
         with open(dir + "/meta.json", "w") as f:
-            json.dump({"total_hosts": jax.host_count(), "step": int(model_state["step"])}, f)
+            json.dump(meta, f)
         print(f"meta written in {time.time() - start:.06}s")
 
     start = time.time()
@@ -289,11 +325,8 @@ def read_sharded_v2(state, dir, checkpoint_hosts, state_shard):
 
 
 def load_ckpt_v2(model_state, dir, state_shard, load_opt):
-    while dir.endswith("/"):
-        dir = dir[:-1]
-
     start = time.time()
-    with open(dir + "/meta.json", "r") as f:
+    with open(dir + "meta.json", "r") as f:
         meta = json.load(f)
 
     ckpt_hosts = meta["total_hosts"]
@@ -306,7 +339,7 @@ def load_ckpt_v2(model_state, dir, state_shard, load_opt):
 
     start = time.time()
     new_state["params"] = read_sharded_v2(model_state["params"],
-                                          dir + "/params",
+                                          dir + "params",
                                           ckpt_hosts,
                                           state_shard["params"])
     head_print(f"params loaded in {time.time() - start:.06}s")
@@ -316,7 +349,7 @@ def load_ckpt_v2(model_state, dir, state_shard, load_opt):
 
     start = time.time()
     new_state["opt_state"] = read_sharded_v2(model_state["opt_state"],
-                                             dir + "/opt_state",
+                                             dir + "opt_state",
                                              ckpt_hosts,
                                              state_shard["opt_state"])
     head_print(f"opt_state loaded in {time.time() - start:.06}s")
