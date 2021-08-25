@@ -154,8 +154,8 @@ layer_2_hf_inner_module_id = {
     "linear_1": "attn.attention.v_proj",
     "linear_2": "attn.attention.k_proj",
     "linear_3": "attn.attention.out_proj",
-    "linear_4": "mlp.c_fc",
-    "linear_5": "mlp.c_proj",
+    "linear_4": "mlp.fc_in",
+    "linear_5": "mlp.fc_out",
     "replicated_layer_norm": "ln_1",
 }
 
