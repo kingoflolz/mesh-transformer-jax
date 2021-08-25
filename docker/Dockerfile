@@ -1,6 +1,6 @@
 # Have tested with a custom Ubuntu-1804 / Python 3.7 / Tensorflow 2.5.0 Base Image
 # Not tested with this image. 
-FROM tensorflow/tensorflow:tensorflow:2.5.0
+FROM tensorflow/tensorflow:2.5.0
 RUN apt update && \
     apt-get install git -y
 
