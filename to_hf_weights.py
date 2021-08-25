@@ -2,7 +2,7 @@
 # Script requires additional install of `pathy`
 # run 'python to_hf_weights.py --help' to see usage.
 ####
-# python to_hf_weights.py --input_ckpt /step_383500 --output_path resharded/debug_ckpt --cpu
+# python to_hf_weights.py --input_ckpt ./step_383500 --config ./configs/6B_roto_256.json --output_path ./gpt-j-6B --cpu --dtype fp32
 ####
 
 import argparse
@@ -13,6 +13,7 @@ import warnings
 import os
 import re
 from typing import Iterable, List, Tuple, Union
+import json
 
 import jax
 import jax.numpy as jnp
@@ -28,7 +29,9 @@ from mesh_transformer.transformer_shard import CausalTransformer
 try:
     from pathy import FluidPath, Pathy
 except ModuleNotFoundError:
-    raise ModuleNotFoundError(f"{__file__} requires `pathy`. Please run `pip install pathy`")
+    raise ModuleNotFoundError(
+        f"{__file__} requires `pathy`. Please run `pip install pathy`"
+    )
 
 # xla: tell jax to not pre allocate all device memory
 # and only allocate memory as needed.
@@ -48,10 +51,13 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument(
     "--input_ckpt",
-    metavar="path",
     type=str,
-    help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
     required=True,
+    help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
+    metavar="path",
+)
+parser.add_argument(
+    "--config", type=str, required=True, help="Config file location", metavar="path"
 )
 parser.add_argument(
     "--output_path",
@@ -79,6 +85,7 @@ parser.add_argument(
 
 def process_args(
     input_ckpt: Union[FluidPath, str],
+    config: Union[FluidPath, str],
     output_path: Union[FluidPath, str],
     dtype: str = "fp16",
     cpu: bool = False,
@@ -87,6 +94,8 @@ def process_args(
     # validate paths and turn them into Pathy paths.
     input_ckpt = Pathy.fluid(str(input_ckpt))
     assert input_ckpt.is_dir(), f'no such directory "{input_ckpt}"'
+    config = Pathy.fluid(str(config))
+    assert config.is_file(), f'no such file "{config}"'
     first_shard = input_ckpt / "shard_0"
     assert first_shard.is_dir(), f'no shards found at "{input_ckpt}"'
 
@@ -113,7 +122,7 @@ def process_args(
     if cpu:
         jax.config.update("jax_platform_name", "cpu")
 
-    return input_ckpt, output_path, np_dtype, torch_dtype
+    return input_ckpt, config, output_path, np_dtype, torch_dtype
 
 
 def tree_flatten_with_names(pytree, is_leaf, path="", to_id=id):
@@ -124,13 +133,19 @@ def tree_flatten_with_names(pytree, is_leaf, path="", to_id=id):
             if is_leaf(v):
                 id_to_name[to_id(v)] = k_path
             else:
-                id_to_name = {**id_to_name, **tree_flatten_with_names(v, is_leaf=is_leaf, path=k_path)}
+                id_to_name = {
+                    **id_to_name,
+                    **tree_flatten_with_names(v, is_leaf=is_leaf, path=k_path),
+                }
     elif getattr(pytree, "__getitem__", None):
         for v in pytree:
             if is_leaf(v):
                 id_to_name[to_id(v)] = path
             else:
-                id_to_name = {**id_to_name, **tree_flatten_with_names(v, is_leaf=is_leaf, path=path)}
+                id_to_name = {
+                    **id_to_name,
+                    **tree_flatten_with_names(v, is_leaf=is_leaf, path=path),
+                }
     else:
         id_to_name[to_id(pytree)] = path
     return id_to_name
@@ -138,7 +153,9 @@ def tree_flatten_with_names(pytree, is_leaf, path="", to_id=id):
 
 def tree_leaves_with_names(pytree, to_id=id):
     leaves = jax.tree_leaves(pytree)
-    is_leaf = lambda x: not isinstance(x, list) and to_id(x) in [to_id(x) for x in leaves]
+    is_leaf = lambda x: not isinstance(x, list) and to_id(x) in [
+        to_id(x) for x in leaves
+    ]
     return tree_flatten_with_names(pytree, is_leaf)
 
 
@@ -150,12 +167,12 @@ def get_tree_leaves_names_reduced(pytree) -> List[str]:
 
 
 layer_2_hf_inner_module_id = {
-    "linear": "attn.attention.q_proj",
-    "linear_1": "attn.attention.v_proj",
-    "linear_2": "attn.attention.k_proj",
-    "linear_3": "attn.attention.out_proj",
-    "linear_4": "mlp.c_fc",
-    "linear_5": "mlp.c_proj",
+    "linear": "attn.q_proj",
+    "linear_1": "attn.v_proj",
+    "linear_2": "attn.k_proj",
+    "linear_3": "attn.out_proj",
+    "linear_4": "mlp.fc_in",
+    "linear_5": "mlp.fc_out",
     "replicated_layer_norm": "ln_1",
 }
 
@@ -188,7 +205,9 @@ def leave_name_to_hf_layer_id(leaf_name: str):
     elif wb in {"b", "offset"}:
         weight_or_bias = "bias"
     else:
-        raise NotImplementedError(f"unknown weight/bais type identifier \"{wb}\" at end of: '{leaf_name}'")
+        raise NotImplementedError(
+            f"unknown weight/bais type identifier \"{wb}\" at end of: '{leaf_name}'"
+        )
 
     # switch statement based on top level module name
     if module_name == "embedding_shard":
@@ -203,7 +222,9 @@ def leave_name_to_hf_layer_id(leaf_name: str):
         hf_id = f"{projection_layer_2_hf_id_start[layer_name]}.{weight_or_bias}"
 
     else:
-        raise NotImplementedError(f"unknown leaf module type \"{module_name}\" in: '{leaf_name}'")
+        raise NotImplementedError(
+            f"unknown leaf module type \"{module_name}\" in: '{leaf_name}'"
+        )
 
     if DEBUG:
         print(f"{leaf_name} \n\t -> {hf_id}")
@@ -245,7 +266,9 @@ def read_npz(fpath: FluidPath):
         deserialized = np.load(
             f_io,
         )
-        assert isinstance(deserialized, np.lib.npyio.NpzFile), f"Not an npz file {type(deserialized)=} {f=}"
+        assert isinstance(
+            deserialized, np.lib.npyio.NpzFile
+        ), f"Not an npz file {type(deserialized)=} {f=}"
         # arrays are only loaded when accessed. So we need to access them before returning
         arrays = []
         for i in deserialized:
@@ -255,7 +278,9 @@ def read_npz(fpath: FluidPath):
         return arrays
 
 
-def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> List[List[np.ndarray]]:
+def read_file_shards(
+    ckpt_dir: FluidPath, fname: str, shards_in: int
+) -> List[List[np.ndarray]]:
     # read same file like "12.npz" across all shard directories
     with multiprocessing.pool.ThreadPool(shards_in) as p:
         return list(
@@ -266,7 +291,9 @@ def read_file_shards(ckpt_dir: FluidPath, fname: str, shards_in: int) -> List[Li
         )
 
 
-def lazy_read_ckpt_shards(ckpt_dir: FluidPath, shards_in: int, pieces: int = 16, reverse: bool = True):
+def lazy_read_ckpt_shards(
+    ckpt_dir: FluidPath, shards_in: int, pieces: int = 16, reverse: bool = True
+):
     for i in range(pieces):
         # iterate through files in direction of choice
         fname = f"{(pieces-1) - i}.npz" if reverse else f"{i}.npz"
@@ -281,22 +308,11 @@ def lazy_read_ckpt_shards(ckpt_dir: FluidPath, shards_in: int, pieces: int = 16,
         yield from file_shards
 
 
-def save_hf_layer(
-    params: torch.Tensor, hf_layer_id: str, pt_save_idx: int, output_path: FluidPath, layer_map: dict
-) -> Tuple[int, dict]:
-    # Save layer as pt file and update layer mapping with the file name
-    fname = f"b{pt_save_idx}.pt"
-    save_loc = output_path / fname
-    # add file to mapping of layer_ids to file names
-    layer_map[hf_layer_id] = fname
-    torch.save(params, save_loc.open(mode="wb"))
-
-    # return incremented save index and updated layer_map
-    return pt_save_idx + 1, layer_map
-
-
 def unshard_leave(
-    leave_shards: Iterable[np.ndarray], leave_name: str, old_shape: List[int], np_dtype=np.float16
+    leave_shards: Iterable[np.ndarray],
+    leave_name: str,
+    old_shape: List[int],
+    np_dtype=np.float16,
 ):
     # reshard all leave shards into single shard.
 
@@ -317,11 +333,14 @@ def unshard_leave(
     x = reshard(
         x,
         old_shape,
-        do_shard_bias=leave_name.endswith("embedding_shard/~/linear/b") or leave_name.endswith("linear_5/b"),
+        do_shard_bias=leave_name.endswith("embedding_shard/~/linear/b")
+        or leave_name.endswith("linear_5/b"),
         do_shard_ln=leave_name.endswith("replicated_layer_norm/offset")
         or leave_name.endswith("replicated_layer_norm/scale"),
     )
-    assert x.shape == old_shape, f"Incompatible checkpoints {x.shape} vs {old_shape} {leave_name}"
+    assert (
+        x.shape == old_shape
+    ), f"Incompatible checkpoints {x.shape} vs {old_shape} {leave_name}"
     return x.astype(np_dtype)
 
 
@@ -333,6 +352,7 @@ def save_pytree_as_hf(
     n_layers: int = 28,
     np_dtype: type = np.float16,
     torch_dtype: torch.dtype = torch.float16,
+    n_seq: int = 2048,
 ):
     # Loads layers and names in reverse order to avoid loading unneeded opt_state layers
     # that are at the front of full (i.e. not slim) models.
@@ -341,18 +361,21 @@ def save_pytree_as_hf(
     leave_names = get_tree_leaves_names_reduced(pytree)
     del pytree
 
-    assert len(old_leave_shapes) == len(leave_names), f"{len(old_leave_shapes)=}  {len(leave_names)=}"
+    assert len(old_leave_shapes) == len(
+        leave_names
+    ), f"{len(old_leave_shapes)=}  {len(leave_names)=}"
     # get generator that emits all shards of leaves from npz files in reverse order
     loaded_shards_in = lazy_read_ckpt_shards(input_ckpt, shards_in, reverse=True)
 
     print("Reading and transforming layers/shards. This may take a while.")
 
-    pt_save_idx = 0
-    save_map = {}  # maps hf layer id's to .pt file names
+    hf_checkpoint = {}
     wte_first = None  # saves first instance of a wte weight in order to combine it with the second.
     # Reverse iteration to grab leave_names and old leaves from the back
     for i in tqdm(
-        reversed(range(len(leave_names))), desc="Reading/Transforming Layers", total=len(leave_names)
+        reversed(range(len(leave_names))),
+        desc="Reading/Transforming Layers",
+        total=len(leave_names),
     ):
 
         # load next shard with correstponding leave name and old shape
@@ -383,62 +406,81 @@ def save_pytree_as_hf(
                 hf_layer_id = "transformer.wte.weight"
 
         # save params as single file with proper hf id mapped to them in save_map
-        pt_save_idx, save_map = save_hf_layer(x, hf_layer_id, pt_save_idx, output_path, save_map)
+        hf_checkpoint[hf_layer_id] = x
 
     # add attention bias layers
-    attn_bias_weights = torch.tril(torch.tensor(np.ones((1, 1, 2048, 2048)), dtype=torch_dtype))
-    attn_masked_bias_weights = torch.tensor(np.array(-1e9), dtype=torch_dtype)
+    attn_bias_weights = torch.tril(torch.ones((n_seq, n_seq), dtype=torch.bool)).view(
+        1, 1, n_seq, n_seq
+    )
+    attn_masked_bias_weights = torch.tensor(-1e9, dtype=torch_dtype)
 
     for i in range(n_layers):
-        bias_id = f"transformer.h.{i}.attn.attention.bias"
-        masked_bias_id = f"transformer.h.{i}.attn.attention.masked_bias"
-        pt_save_idx, save_map = save_hf_layer(attn_bias_weights, bias_id, pt_save_idx, output_path, save_map)
-        pt_save_idx, save_map = save_hf_layer(
-            attn_masked_bias_weights, masked_bias_id, pt_save_idx, output_path, save_map
-        )
+        hf_checkpoint[f"transformer.h.{i}.attn.bias"] = attn_bias_weights
+        hf_checkpoint[f"transformer.h.{i}.attn.masked_bias"] = attn_masked_bias_weights
 
-    torch.save(save_map, (output_path / "m.pt").open(mode="wb"))
+    torch.save(hf_checkpoint, (output_path / "pytorch_model.bin").open(mode="wb"))
+
+
+def save_config_to_hf_format(params: dict, torch_dtype: str, output_path: FluidPath):
+
+    config = {
+        "activation_function": "gelu_new",
+        "architectures": ["GPTJForCausalLM"],
+        "attn_pdrop": 0.0,
+        "bos_token_id": 50256,
+        "embd_pdrop": 0.0,
+        "eos_token_id": 50256,
+        "gradient_checkpointing": False,
+        "initializer_range": 0.02,
+        "layer_norm_epsilon": 1e-05,
+        "model_type": "gptj",
+        "n_embd": params["d_model"],
+        "n_head": params["n_heads"],
+        "n_layer": params["layers"],
+        "n_positions": params["seq"],
+        "rotary_dim": params["pe_rotary_dims"],
+        "summary_activation": None,
+        "summary_first_dropout": 0.1,
+        "summary_proj_to_labels": True,
+        "summary_type": "cls_index",
+        "summary_use_proj": True,
+        "transformers_version": "4.10.0.dev0",
+        "tokenizer_class": "GPT2Tokenizer",
+        "task_specific_params": {
+            "text-generation": {"do_sample": True, "temperature": 1.0, "max_length": 50}
+        },
+        "torch_dtype": str(torch_dtype).split(".")[-1],
+        "use_cache": True,
+        "vocab_size": params["n_vocab"],
+    }
+
+    with open(output_path / "config.json", "w") as file:
+        json.dump(config, file, indent=2)
 
 
 def save_sharded_to_hf_format(
     input_ckpt: Union[FluidPath, str],
+    params: dict,
     output_path: Union[FluidPath, str],
     cpu: bool = False,
     dtype: str = "fp16",
 ):
 
-    input_ckpt, output_path, np_dtype, torch_dtype = process_args(
-        input_ckpt=input_ckpt, output_path=output_path, dtype=dtype, cpu=cpu
-    )
-
-    params = {
-        "layers": 28,
-        "d_model": 4096,
-        "n_heads": 16,
-        "n_vocab": 50400,
-        "norm": "layernorm",
-        "pe": "rotary",
-        "pe_rotary_dims": 64,
-        "early_cast": True,
-        "seq": 2048,
-        "cores_per_replica": 1,
-        "per_replica_batch": 1,
-        "optimizer": optax.scale(0),
-        "sampler": None,
-    }
-
     devices = np.array([jax.devices()[0]]).reshape((1, 1))
     with maps.mesh(devices, ("dp", "mp")):
-        network = CausalTransformer(params)
+        params_local = params.copy()
+        params_local["cores_per_replica"] = maps.thread_resources.env.shape["mp"]
+        network = CausalTransformer(params_local)
 
         save_pytree_as_hf(
             network.state,
             input_ckpt=input_ckpt,
-            shards_in=8,
+            shards_in=params["cores_per_replica"],
             output_path=output_path,
             n_layers=params["layers"],
             np_dtype=np_dtype,
             torch_dtype=torch_dtype,
+            n_seq=params["seq"],
         )
 
 
@@ -447,5 +489,13 @@ if __name__ == "__main__":
 
     DEBUG = args["debug"]
     start = time.time()
-    save_sharded_to_hf_format(args["input_ckpt"], args["output_path"], args["cpu"], args["dtype"])
-    print(f"HF weights created in {(time.time() - start):.0f}s \"{args['output_path']}\"")
+
+    input_ckpt, config, output_path, np_dtype, torch_dtype = process_args(**args)
+    params = json.load(open(config))
+    params["optimizer"] = optax.scale(0)
+
+    save_sharded_to_hf_format(input_ckpt, params, output_path, np_dtype, torch_dtype)
+    save_config_to_hf_format(params, torch_dtype, output_path)
+    print(
+        f"HF weights created in {(time.time() - start):.0f}s \"{args['output_path']}\""
+    )
