@@ -93,7 +93,7 @@ if __name__ == "__main__":
                                       sample_size=params['seq'],
                                       restore_state=train_load_restore)
 
-    global_val_batch = per_replica_batch * tpu_size // cores_per_replica
+    global_val_batch = int(per_replica_batch * tpu_size // cores_per_replica * params.get("val_batch_multiplier", 1))
 
     val_sets = {}
 
@@ -164,4 +164,6 @@ if __name__ == "__main__":
             print(f"step {step} val results: {dumped}")
             wandb.log(flat_results, step)
         step += 1
+
+        pbar.set_postfix({'loss': loss, 'last_loss': last_loss})
         pbar.update()
