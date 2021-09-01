@@ -54,7 +54,7 @@ This guide is labeled "The Basics", anything we haven't covered so far is out of
 To use the model in HuggingFace's `transformer` library using pytorch, you'll need to transfer the weights
 into a format that it recognizes. This can be done using `to_hf_weights.py`. It's recommended that you use `slim_model.py` before attempting to move the weights to a pytorch/transformer format. Use `python to_hf_weights.py --help` to see usage details.
 
-*note: as of 8/17/2021, `transformer` doesn't have support for gpt-j and you have to use this fork `https://github.com/finetuneanon/transformers`*
+*note: as of 9/1/2021, GPT-J has been merged into the `main` branch of `transformers` but has not yet been put into production. Run `pip install git+https://github.com/huggingface/transformers#transformers` to install the current `main` branch.
 
 ## Learning Rate Notes
 
