@@ -28,9 +28,11 @@ Note that steps 6 and 7, preparing the index and config files, can be done later
    - `model_dir`: Change to the directory you'd like to save your checkpoints in
    - `train_set` and `val_set`: Change to the index files from the last step
    - `eval_harness_tasks`: Can be removed if you don't plan on using the eval harness
-   - `val_batches` & `val_every` & `ckpt_every` & `keep_every`: Usage should be intuitive. Don't set the `foo_every` values to 0 though or you'll get a divide by zero error. If you don't have a `val_set`, just set `val_every` to something higher than `total_steps`.
+   -  `val_every` & `ckpt_every` & `keep_every`: Usage should be intuitive. Don't set the `foo_every` values to 0 though or you'll get a divide by zero error. If you don't have a `val_set`, just set `val_every` to something higher than `total_steps`.
+   - `val_batches`: This should equal the number of sequences in your val dataset. You can find this number at the end of the .tfrecords file produced by `create_finetune_tfrecords.py`
    - `name`: Change to a name for your model.
-   - `warmup_steps`, `lr`,etc.: see the *Learning Rate Notes* section at the end of the guide.
+   - `warmup_steps`, `lr`, `val_batches`, etc.: see the *Learning Rate Notes* section at the end of the guide.
+
 
 8. Push the changes to your GitHub repo.
 
