@@ -1,3 +1,18 @@
+# Table of contents
+1. [Mesh Transformer JAX](#mesh-transformer-jax)
+    1. [Updates](#updates)
+2. [Pretrained Models](#pretrained-models)
+   1. [GPT-J-6B](#gpt-j-6b)
+      1. [Links](#links)
+      2. [Acknowledgments](#acknowledgments)
+      3. [License](#license)
+      4. [Model Details](#model-details)
+      5. [Zero-Shot Evaluations](#zero-shot-evaluations)
+3. [Architecture and Usage](#architecture-and-usage)
+   1. [Fine-tuning](#fine-tuning)
+   2. [JAX Dependency](#jax-dependency)
+4. [TODO](#todo)
+
 # Mesh Transformer JAX
 
 A haiku library using the `xmap`/`pjit` operators in JAX for model parallelism of transformers.
