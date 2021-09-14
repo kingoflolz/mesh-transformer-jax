@@ -139,6 +139,50 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
 
     original_opt_state = pytree["opt_state"]
 
+    # TODO: figure out how to use a process pool here for more speed
+    with multiprocessing.pool.ThreadPool(shards_in) as p:
+        start = time.time()
+        shards = list((p.imap(read_shard, [f"{dir}shard_{i}/" for i in range(shards_in)])))
+        print(f"read from disk/gcs in {time.time() - start:.06}s")
+
+    def _unshard(shards, old_flattened):
+        unsharded = []
+
+        for old, *all_shards in zip(old_flattened, *shards):
+            x = np.stack(all_shards)
+            # No idea why this is V2...?
+            if x.dtype == np.dtype('V2'):
+                x.dtype = jnp.bfloat16
+
+            if shards_out != shards_in:
+                x = reshard(x, old.shape)
+            unsharded.append(x)
+
+            assert x.shape == old.shape, f"Incompatible checkpoints {x.shape} vs {old.shape}"
+        return unsharded
+    try:
+        unsharded = _unshard(shards, old_flattened)
+    except AssertionError:
+        load_opt = False  # no opt to load in ckpt
+        del pytree['opt_state']
+        old_flattened, structure = jax.tree_flatten(pytree)
+        unsharded = _unshard(shards, old_flattened)
+
+    loaded_pytree = jax.tree_unflatten(structure, unsharded)
+
+    if not load_opt:
+        loaded_pytree['opt_state'] = original_opt_state
+    return loaded_pytree
+
+
+def read_ckpt_lowmem(pytree, dir, shards_in, shards_out=None, load_opt=True):
+    if shards_out is None:
+        shards_out = shards_in
+
+    old_flattened, structure = jax.tree_flatten(pytree)
+
+    original_opt_state = pytree["opt_state"]
+
     def _unshard():
         start = time.time()
         unsharded = []
