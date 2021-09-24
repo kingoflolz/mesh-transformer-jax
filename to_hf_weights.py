@@ -44,7 +44,7 @@ parser = argparse.ArgumentParser(
     )
 )
 parser.add_argument(
-    "--input_ckpt",
+    "--input-ckpt",
     type=str,
     required=True,
     help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
@@ -54,7 +54,7 @@ parser.add_argument(
     "--config", type=str, required=True, help="Config file location", metavar="path"
 )
 parser.add_argument(
-    "--output_path",
+    "--output-path",
     required=True,
     type=str,
     help='Full path to save checkpoint to. Google storage can be used with "gs://bucket/path" format.',
