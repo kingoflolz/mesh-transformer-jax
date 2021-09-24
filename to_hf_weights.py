@@ -1,8 +1,5 @@
 ####
-# Script requires additional install of `pathy`
-# run 'python to_hf_weights.py --help' to see usage.
-####
-# python to_hf_weights.py --input_ckpt ./step_383500 --config ./configs/6B_roto_256.json --output_path ./gpt-j-6B --cpu --dtype fp32
+# python to_hf_weights.py --input-ckpt ./step_383500 --config ./configs/6B_roto_256.json --output-path ./gpt-j-6B --cpu --dtype fp32
 ####
 
 import argparse
@@ -12,12 +9,13 @@ import time
 import warnings
 import os
 import re
-from typing import Iterable, List, Tuple, Union
+from typing import Iterable, List, Union
 import json
 
 import jax
 import jax.numpy as jnp
 from jax.experimental import maps
+from pathy import FluidPath, Pathy
 import numpy as np
 import optax
 import torch
@@ -25,13 +23,6 @@ import torch
 from tqdm import tqdm
 
 from mesh_transformer.transformer_shard import CausalTransformer
-
-try:
-    from pathy import FluidPath, Pathy
-except ModuleNotFoundError:
-    raise ModuleNotFoundError(
-        f"{__file__} requires `pathy`. Please run `pip install pathy`"
-    )
 
 # xla: tell jax to not pre allocate all device memory
 # and only allocate memory as needed.
@@ -50,7 +41,7 @@ parser = argparse.ArgumentParser(
     )
 )
 parser.add_argument(
-    "--input_ckpt",
+    "--input-ckpt",
     type=str,
     required=True,
     help='path to model checkpoint folder. Google storage can be used with "gs://bucket/path/step_{n}" format.',
@@ -60,7 +51,7 @@ parser.add_argument(
     "--config", type=str, required=True, help="Config file location", metavar="path"
 )
 parser.add_argument(
-    "--output_path",
+    "--output-path",
     required=True,
     type=str,
     help='Full path to save checkpoint to. Google storage can be used with "gs://bucket/path" format.',
@@ -454,8 +445,8 @@ def save_config_to_hf_format(params: dict, torch_dtype: str, output_path: FluidP
         "vocab_size": params["n_vocab"],
     }
 
-    with open(output_path / "config.json", "w") as file:
-        json.dump(config, file, indent=2)
+    with (output_path / "config.json").open("w") as f:
+        json.dump(config, f, indent=2)
 
 
 def save_sharded_to_hf_format(
