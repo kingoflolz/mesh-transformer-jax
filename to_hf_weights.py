@@ -1,8 +1,5 @@
 ####
-# Script requires additional install of `pathy`
-# run 'python to_hf_weights.py --help' to see usage.
-####
-# python to_hf_weights.py --input_ckpt ./step_383500 --config ./configs/6B_roto_256.json --output_path ./gpt-j-6B --cpu --dtype fp32
+# python to_hf_weights.py --input-ckpt ./step_383500 --config ./configs/6B_roto_256.json --output-path ./gpt-j-6B --cpu --dtype fp32
 ####
 
 import argparse
