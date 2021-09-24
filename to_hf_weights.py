@@ -12,12 +12,13 @@ import time
 import warnings
 import os
 import re
-from typing import Iterable, List, Tuple, Union
+from typing import Iterable, List, Union
 import json
 
 import jax
 import jax.numpy as jnp
 from jax.experimental import maps
+from pathy import FluidPath, Pathy
 import numpy as np
 import optax
 import torch
@@ -25,13 +26,6 @@ import torch
 from tqdm import tqdm
 
 from mesh_transformer.transformer_shard import CausalTransformer
-
-try:
-    from pathy import FluidPath, Pathy
-except ModuleNotFoundError:
-    raise ModuleNotFoundError(
-        f"{__file__} requires `pathy`. Please run `pip install pathy`"
-    )
 
 # xla: tell jax to not pre allocate all device memory
 # and only allocate memory as needed.
