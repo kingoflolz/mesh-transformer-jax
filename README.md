@@ -113,6 +113,7 @@ Models roughly sorted by performance, or by FLOPs if not available.
 | GPT-3-13B*‡     | ✘       | 2.3e22         | 3.56          | 72.5%         | 67.9%        | 70.9%       | 78.5%  | ~800              |
 | GPT-3-175B*‡    | ✘       | 3.1e23         | 3.00          | 76.2%         | 70.2%        | 78.9%       | 81.0%  | ~800              |
 | GPT-3-Davinci‡  | ✘       | -----          | 3.0           | 75%           | 72%          | 78%         | 80%    | -----             |
+| MT-NLG 530B*‡   | ✘       | -----          | -----         | 76.6%         | 73.0%        | 80.2%       | 82.0%  | -----             |
 
 `*` represents evaluation numbers reported by their respective authors, all other numbers are provided by
 running the [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness/) either with the released
