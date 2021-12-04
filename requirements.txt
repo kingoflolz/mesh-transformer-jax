@@ -4,7 +4,7 @@ wandb>=0.11.2
 einops~=0.3.0
 requests~=2.25.1
 fabric~=2.6.0
-optax==0.0.6
+optax==0.0.9
 dm-haiku==0.0.5
 git+https://github.com/EleutherAI/lm-evaluation-harness/
 ray[default]==1.4.1
