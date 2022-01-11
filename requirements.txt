@@ -1,5 +1,5 @@
 numpy~=1.19.5
-tqdm~=4.45.0
+tqdm>=4.45.0
 wandb>=0.11.2
 einops~=0.3.0
 requests~=2.25.1
