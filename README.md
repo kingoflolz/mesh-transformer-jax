@@ -40,9 +40,9 @@ A 6 billion parameter, autoregressive text generation model trained on [The Pile
 
 ### Links
 
-[Slim weights (bf16 weights only, for inference, 9GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
+[Slim weights (bf16 weights only, for inference, 9GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
 
-[Full weights (including optimizer params, 61GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
+[Full weights (including optimizer params, 61GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
 
 [Colab demo](http://colab.research.google.com/github/kingoflolz/mesh-transformer-jax/blob/master/colab_demo.ipynb)
 
