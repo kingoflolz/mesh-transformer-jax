@@ -8,7 +8,7 @@ Before anything else, you'll likely want to apply for access to the TPU Research
 
 2. TPUs use Google Cloud buckets for storage, go ahead and [create one now](https://console.cloud.google.com/storage/create-bucket). Make sure it's in the region the TPU VM will be; the email from TRC will tell you which region(s) you can use free TPUs in.
 
-3. You'll need the full pretrained weights in order to fine-tune the model. [Download those here](https://the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd).
+3. You'll need the full pretrained weights in order to fine-tune the model. [Download those here](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd).
 
 Now that you have a bucket on the cloud and the weights on your PC, you need to upload the weights to the bucket in two steps:
 
