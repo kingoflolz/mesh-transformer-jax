@@ -40,9 +40,9 @@ A 6 billion parameter, autoregressive text generation model trained on [The Pile
 
 ### Links
 
-[Slim weights (bf16 weights only, for inference, 9GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
+[Slim weights (bf16 weights only, for inference, 9GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
 
-[Full weights (including optimizer params, 61GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
+[Full weights (including optimizer params, 61GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
 
 [Colab demo](http://colab.research.google.com/github/kingoflolz/mesh-transformer-jax/blob/master/colab_demo.ipynb)
 
@@ -113,6 +113,7 @@ Models roughly sorted by performance, or by FLOPs if not available.
 | GPT-3-13B*‡     | ✘       | 2.3e22         | 3.56          | 72.5%         | 67.9%        | 70.9%       | 78.5%  | ~800              |
 | GPT-3-175B*‡    | ✘       | 3.1e23         | 3.00          | 76.2%         | 70.2%        | 78.9%       | 81.0%  | ~800              |
 | GPT-3-Davinci‡  | ✘       | -----          | 3.0           | 75%           | 72%          | 78%         | 80%    | -----             |
+| Gopher 230B*	  | ✘	    | 6.31E+23	     | -----    	 | 74.50%        | 70.10%   	| 79.20%      | 81.80% | 1344              |
 | MT-NLG 530B*‡   | ✘       | -----          | -----         | 76.6%         | 73.0%        | 80.2%       | 82.0%  | -----             |
 
 `*` represents evaluation numbers reported by their respective authors, all other numbers are provided by

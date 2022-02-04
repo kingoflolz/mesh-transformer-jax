@@ -309,7 +309,7 @@ def unshard_leave(
 
     # stack leave shards into single np.ndarray
     x = np.stack(leave_shards)
-    assert isinstance(x, jnp.ndarray)
+    # assert isinstance(x, jnp.ndarray)
 
     # As far as i can tell, this just re labels the dtype of arrays
     # labeled with "V2" dtype. In theory, V2 was just an alias for bfloat16
