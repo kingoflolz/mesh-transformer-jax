@@ -1,0 +1,6 @@
+{
+    "azure-iot-edge.defaultPlatform": {
+        "platform": "windows-amd64",
+        "alias": null
+    }
+}
