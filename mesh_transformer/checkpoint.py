@@ -175,6 +175,59 @@ def read_ckpt(pytree, dir, shards_in, shards_out=None, load_opt=True):
     return loaded_pytree
 
 
+def read_ckpt_lowmem(pytree, dir, shards_in, shards_out=None, load_opt=True):
+    if shards_out is None:
+        shards_out = shards_in
+
+    old_flattened, structure = jax.tree_flatten(pytree)
+
+    original_opt_state = pytree["opt_state"]
+
+    def _unshard():
+        start = time.time()
+        unsharded = []
+        devices = jax.devices()
+        device_count = len(devices)
+        device_index = 0
+
+        for file_index in range(pieces):
+            array_keys = [*np.load(f"{dir}shard_0/{file_index}.npz").keys()]
+            for array_index in range(len(array_keys)):
+                unstacked = []
+                for shard_index in range(shards_in):
+                    npz = np.load(f"{dir}shard_{shard_index}/{file_index}.npz")
+                    array = npz[array_keys[array_index]]
+                    if array.dtype == 'V2':
+                        array.dtype = jnp.bfloat16
+                    unstacked.append(array)
+
+                x = jax.device_put(jnp.stack(unstacked), device=devices[device_index % device_count])
+
+                if shards_out != shards_in:
+                    x = reshard(x, old_flattened[device_index].shape)
+                unsharded.append(x)
+
+                assert x.shape == old_flattened[device_index].shape, f"Incompatible checkpoints {x.shape} vs {old_flattened[device_index].shape}"
+                device_index += 1
+
+        print(f"read from disk/gcs in {time.time() - start:.06}s")
+        return unsharded
+
+    try:
+        unsharded = _unshard()
+    except AssertionError:
+        load_opt = False  # no opt to load in ckpt
+        del pytree['opt_state']
+        old_flattened, structure = jax.tree_flatten(pytree)
+        unsharded = _unshard()
+
+    loaded_pytree = jax.tree_unflatten(structure, unsharded)
+
+    if not load_opt:
+        loaded_pytree['opt_state'] = original_opt_state
+    return loaded_pytree
+
+
 def parallel_write(arrays, fname):
     # TODO: make this actually parallel
     with open(fname, "wb") as f:

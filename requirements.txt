@@ -1,17 +1,17 @@
 numpy~=1.19.5
-tqdm~=4.45.0
+tqdm>=4.45.0
 wandb>=0.11.2
 einops~=0.3.0
 requests~=2.25.1
 fabric~=2.6.0
-optax==0.0.6
-git+https://github.com/deepmind/dm-haiku
+optax==0.0.9
+dm-haiku==0.0.5
 git+https://github.com/EleutherAI/lm-evaluation-harness/
 ray[default]==1.4.1
 jax~=0.2.12
 Flask~=1.1.2
 cloudpickle~=1.3.0
-tensorflow-cpu~=2.5.0
+tensorflow-cpu~=2.6.0
 google-cloud-storage~=1.36.2
 transformers
 smart_open[gcs]
@@ -20,3 +20,4 @@ ftfy
 fastapi
 uvicorn
 lm_dataformat
+pathy

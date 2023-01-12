@@ -8,7 +8,7 @@ Before anything else, you'll likely want to apply for access to the TPU Research
 
 2. TPUs use Google Cloud buckets for storage, go ahead and [create one now](https://console.cloud.google.com/storage/create-bucket). Make sure it's in the region the TPU VM will be; the email from TRC will tell you which region(s) you can use free TPUs in.
 
-3. You'll need the full pretrained weights in order to fine-tune the model. [Download those here](https://the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd).
+3. You'll need the full pretrained weights in order to fine-tune the model. [Download those here](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd).
 
 Now that you have a bucket on the cloud and the weights on your PC, you need to upload the weights to the bucket in two steps:
 
@@ -28,9 +28,11 @@ Note that steps 6 and 7, preparing the index and config files, can be done later
    - `model_dir`: Change to the directory you'd like to save your checkpoints in
    - `train_set` and `val_set`: Change to the index files from the last step
    - `eval_harness_tasks`: Can be removed if you don't plan on using the eval harness
-   - `val_batches` & `val_every` & `ckpt_every` & `keep_every`: Usage should be intuitive. Don't set the `foo_every` values to 0 though or you'll get a divide by zero error. If you don't have a `val_set`, just set `val_every` to something higher than `total_steps`.
+   -  `val_every` & `ckpt_every` & `keep_every`: Usage should be intuitive. Don't set the `foo_every` values to 0 though or you'll get a divide by zero error. If you don't have a `val_set`, just set `val_every` to something higher than `total_steps`.
+   - `val_batches`: This should equal the number of sequences in your val dataset. You can find this number at the end of the .tfrecords file produced by `create_finetune_tfrecords.py`
    - `name`: Change to a name for your model.
-   - `warmup_steps`, `lr`,etc.: see the *Learning Rate Notes* section at the end of the guide.
+   - `warmup_steps`, `lr`, `val_batches`, etc.: see the *Learning Rate Notes* section at the end of the guide.
+
 
 8. Push the changes to your GitHub repo.
 
@@ -54,7 +56,7 @@ This guide is labeled "The Basics", anything we haven't covered so far is out of
 To use the model in HuggingFace's `transformer` library using pytorch, you'll need to transfer the weights
 into a format that it recognizes. This can be done using `to_hf_weights.py`. It's recommended that you use `slim_model.py` before attempting to move the weights to a pytorch/transformer format. Use `python to_hf_weights.py --help` to see usage details.
 
-*note: as of 8/17/2021, `transformer` doesn't have support for gpt-j and you have to use this fork `https://github.com/finetuneanon/transformers`*
+*note: as of 9/1/2021, GPT-J has been merged into the `main` branch of `transformers` but has not yet been put into production. Run `pip install git+https://github.com/huggingface/transformers#transformers` to install the current `main` branch.
 
 ## Learning Rate Notes
 

@@ -17,7 +17,7 @@ def nucleaus_filter(logits, top_p=0.9, top_k=None):
         indices_range = jnp.arange(len(sorted_indices[0]))
         indices_range = jnp.stack([indices_range] * len(sorted_indices), axis=0)
 
-        sorted_indices_to_remove = jnp.where(indices_range > top_k, sorted_indices, 0)
+        sorted_indices_to_remove = jnp.where(indices_range >= top_k, sorted_indices, 0)
 
         _, indices_to_remove = jax.lax.sort_key_val(sorted_indices, sorted_indices_to_remove)
 
