@@ -40,9 +40,11 @@ A 6 billion parameter, autoregressive text generation model trained on [The Pile
 
 ### Links
 
-[Slim weights (bf16 weights only, for inference, 9GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
+[Download slim weights (bf16 weights only, for inference, 9GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd)
 
-[Full weights (including optimizer params, 61GB)](https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
+[Download full weights (including optimizer params, 61GB)](https://the-eye.eu/public/AI/GPT-J-6B/step_383500.tar.zstd)
+
+[Partially trained checkpoints](https://the-eye.eu/public/AI/GPT-J-6B/)
 
 [Colab demo](http://colab.research.google.com/github/kingoflolz/mesh-transformer-jax/blob/master/colab_demo.ipynb)
 
@@ -190,14 +192,3 @@ To cite the weights of GPT-J-6B:
 
 If you use this repository or any of the pretrained weights to do something cool, we would love to hear about it.
 Feel free to open a github issue or reach out over email (in profile).
-
-# TODO
-- [x] disentangle heads and shards
-- [x] test/benchmark on TPU
-- [x] implement gradient checkpointing
-- [x] fix initialization
-- [x] mixed precision
-- [x] deal with preemptible TPUs
-- [x] test and validate generation
-- [x] shard activations instead of replicating for memory efficiency (in v2)
-- [x] support ZeRO style sharding (in v2)
