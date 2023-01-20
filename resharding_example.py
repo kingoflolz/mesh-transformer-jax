@@ -38,7 +38,7 @@ params["sampler"] = nucleaus_sample
 params["optimizer"] = optax.scale(0)
 
 devices = np.array([jax.devices()[0]]).reshape((1, 1))
-maps.thread_resources.env = maps.ResourceEnv(maps.Mesh(devices, ('dp', 'mp')))
+maps.thread_resources.env = maps.ResourceEnv(maps.Mesh(devices, ('dp', 'mp')),())
 
 tokenizer = transformers.GPT2TokenizerFast.from_pretrained('gpt2')
 
@@ -47,12 +47,12 @@ network = CausalTransformer(params)
 start = time.time()
 
 # here we load a checkpoint which was written with 8 shards into 1 shard
-network.state = read_ckpt(network.state, "step_383500/", 8, shards_out=cores_per_replica)
+network.state = read_ckpt(network.state, "gs://eu-projv/mesh_jax_pile_6B_rotary_slim/step_72/", 8, shards_out=cores_per_replica)
 
 # move the state to CPU/system memory so it's not duplicated by xmap
 network.state = jax.device_put(network.state, jax.devices("cpu")[0])
 
-def infer(context, top_k=40, top_p=0.9, temp=1.0, gen_len=512):
+def infer(context, top_k=30, top_p=0.9, temp=1.0, gen_len=64):
     tokens = tokenizer.encode(context)
 
     provided_ctx = len(tokens)
